@@ -87,4 +87,4 @@ if (( uinput )); then
   "${sudo_cmd[@]}" install -m 0644 "$here/dist/71-qrd-maestro-s3-uinput.rules" "$rules_dir/$uinput_name"
 fi
 reload
-echo "Installed rules for $mac in $rules_dir. Unplug and reconnect the controller to apply them to the open device."
+echo "Installed rules for $mac in $rules_dir and reloaded udev. If a name or permission has not appeared, unplug and reconnect the controller."

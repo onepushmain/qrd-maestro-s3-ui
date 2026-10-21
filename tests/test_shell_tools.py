@@ -218,7 +218,9 @@ class InstallUdev(unittest.TestCase):
             run("install-udev.sh", "--mac", self.MAC, "--uinput", "--print", path_prefix=bin_dir)
             self.assertFalse(marker.exists())
 
-    @unittest.skipUnless(shutil.which("udevadm"), "udevadm not installed")
+    @unittest.skipUnless(
+        shutil.which("udevadm") and subprocess.run(["udevadm", "verify", "--help"], capture_output=True).returncode == 0,
+        "this udevadm has no `verify` command")
     def test_rendered_rules_pass_udevadm_verify(self):
         rules = run("install-udev.sh", "--mac", self.MAC, "--uinput", "--print").stdout
         with tempfile.TemporaryDirectory() as d:
