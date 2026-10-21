@@ -10,4 +10,4 @@ lint:
 	@for f in tools/*.sh; do bash -n "$$f" || exit 1; done
 	python3 -m py_compile re/*.py tools/*.py
 	node --check core.js && node --check app.js && node --check demo.js
-	@command -v shellcheck >/dev/null && shellcheck tools/*.sh || echo "shellcheck not installed; skipped"
+	@if command -v shellcheck >/dev/null; then shellcheck tools/*.sh; else echo "shellcheck not installed; skipped"; fi

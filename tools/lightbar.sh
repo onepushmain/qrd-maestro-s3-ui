@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # Set the controller's lightbar through the kernel's LED interface (hid-playstation).
 # Runtime only: nothing is written to the controller's saved settings.
-# Usage: tools/lightbar.sh R G B     each 0-255, for example: tools/lightbar.sh 0 0 255
-#        tools/lightbar.sh off
-#        tools/lightbar.sh battery   green above 60%, amber above 25%, red below
+# Usage: tools/lightbar.sh [--mac AA:BB:CC:DD:EE:FF] R G B     each 0-255, for example: tools/lightbar.sh 0 0 255
+#        tools/lightbar.sh [--mac ...] off
+#        tools/lightbar.sh [--mac ...] battery   green above 60%, amber above 25%, red below
+# Without --mac it acts on the first DualShock 4 v2 it finds. re/identify.py prints a controller's MAC.
 # The LED files are root-only by default: run with sudo, or install the udev rules
 # (tools/install-udev.sh) so your own user can write them. SYSFS overrides /sys (used by the tests).
 set -euo pipefail
@@ -11,7 +12,14 @@ sysfs=${SYSFS:-/sys}
 
 usage() { awk 'NR > 1 && /^#/ { sub(/^# ?/, ""); print; next } NR > 1 { exit }' "$0"; }
 die() { echo "lightbar: $1" >&2; exit "${2:-1}"; }
-channel_ok() { [[ $1 =~ ^[0-9]+$ ]] && (( 10#$1 <= 255 )); }
+channel_ok() { [[ $1 =~ ^0*([0-9]{1,3})$ ]] && (( 10#${BASH_REMATCH[1]} <= 255 )); }   # at most three digits once leading zeros are gone
+
+mac=""
+if [[ ${1:-} == --mac ]]; then
+  [[ -n ${2:-} ]] || die "--mac needs a value" 2
+  mac=${2,,}
+  shift 2
+fi
 
 case "${1:-}" in
   ''|-h|--help) usage; exit 0 ;;
@@ -27,11 +35,12 @@ esac
 led="" uniq=""
 for l in "$sysfs"/class/leds/input*:red; do
   [[ -e $l ]] || continue
-  if grep -qE '^HID_ID=000[35]:0000054C:000009CC$' "$l/device/uevent" 2>/dev/null; then
-    led=${l%:red}
-    uniq=$(sed -n 's/^HID_UNIQ=//p' "$l/device/uevent")   # its battery is ps-controller-battery-<this MAC>
-    break
-  fi
+  grep -qE '^HID_ID=000[35]:0000054C:000009CC$' "$l/device/uevent" 2>/dev/null || continue
+  candidate=$(sed -n 's/^HID_UNIQ=//p' "$l/device/uevent")   # also names its battery: ps-controller-battery-<MAC>
+  if [[ -n $mac && ${candidate,,} != "$mac" ]]; then continue; fi
+  led=${l%:red}
+  uniq=$candidate
+  break
 done
 [[ -n $led ]] || die "Maestro S3 lightbar not found (is the controller connected?)"
 

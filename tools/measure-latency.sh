@@ -55,7 +55,9 @@ case "${1:-}" in
   --analyze)
     file=${2:-}
     [[ -n $file && -r $file ]] || die "--analyze needs a readable usbmon capture file" 2
-    if [[ -n ${3:-} && -n ${4:-} ]]; then bus=$3 dev=$4
+    if [[ -n ${3:-} || -n ${4:-} ]]; then
+      [[ ${3:-} =~ ^[0-9]+$ && ${4:-} =~ ^[0-9]+$ ]] || die "give both BUS and DEV as numbers, or neither" 2
+      bus=$((10#$3)) dev=$((10#$4))   # lsusb prints them zero-padded; usbmon does not
     else read -r bus dev < <(find_usb) || die "Maestro S3 not found on USB; pass BUS and DEV after the file name" 2
     fi
     analyse "$bus" "$dev" < "$file" ;;

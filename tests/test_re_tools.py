@@ -4,6 +4,7 @@ Expected values are written out by hand: the feature IDs of the real descriptor 
 independent walk of the HID item grammar, the pairing report uses made-up MAC addresses, and the
 firmware report is the 0xA3 reply a controller really sent."""
 import json
+import os
 import pathlib
 import subprocess
 import sys
@@ -76,6 +77,31 @@ class FindDevice(unittest.TestCase):
             self.tree(root, {"hidraw1": "0003:0000046D:0000C547"})
             with self.assertRaises(hidraw.DeviceNotFound):
                 hidraw.find_device(sysfs=root)
+
+
+class OpeningTheDevice(unittest.TestCase):
+    def test_a_symlink_to_the_node_reads_the_same_descriptor(self):
+        with tempfile.TemporaryDirectory() as root:
+            node = pathlib.Path(root, "dev", "hidraw3")
+            node.parent.mkdir()
+            node.write_text("")
+            link = pathlib.Path(root, "dev", "qrd-maestro-s3-hidraw")   # the name tools/install-udev.sh gives the node
+            link.symlink_to(node)
+            sysdir = pathlib.Path(root, "sys", "class", "hidraw", "hidraw3", "device")
+            sysdir.mkdir(parents=True)
+            (sysdir / "report_descriptor").write_bytes(b"\x85\x02\xb1\x02")
+            got = hidraw.read_descriptor(str(link), sysfs=str(pathlib.Path(root, "sys")))
+        self.assertEqual(got, b"\x85\x02\xb1\x02")
+
+    @unittest.skipIf(hasattr(os, "geteuid") and os.geteuid() == 0, "root can read any file")
+    def test_a_node_the_user_may_not_read_is_explained(self):
+        with tempfile.TemporaryDirectory() as root:
+            node = pathlib.Path(root, "hidraw3")
+            node.write_text("")
+            node.chmod(0)
+            with self.assertRaises(PermissionError) as ctx:
+                hidraw.open_device(str(node))
+        self.assertIn("install-udev", str(ctx.exception))
 
 
 class Identify(unittest.TestCase):

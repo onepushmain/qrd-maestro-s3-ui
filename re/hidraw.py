@@ -28,7 +28,8 @@ def find_device(sysfs="/sys"):
 
 
 def read_descriptor(dev, sysfs="/sys"):
-    path = os.path.join(sysfs, "class", "hidraw", os.path.basename(dev), "device", "report_descriptor")
+    node = os.path.basename(os.path.realpath(dev))   # follow a symlink such as /dev/qrd-maestro-s3-hidraw
+    path = os.path.join(sysfs, "class", "hidraw", node, "device", "report_descriptor")
     with open(path, "rb") as f:
         return f.read()
 
@@ -56,7 +57,10 @@ def feature_report_ids(descriptor):
 
 
 def open_device(dev):
-    return os.open(dev, os.O_RDONLY)
+    try:
+        return os.open(dev, os.O_RDONLY)
+    except PermissionError as err:
+        raise PermissionError(err.errno, f"no permission to read {dev}; run tools/install-udev.sh, or use sudo", dev) from None
 
 
 def get_feature(fd, report_id, length=512):

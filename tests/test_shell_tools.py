@@ -80,6 +80,28 @@ class Lightbar(unittest.TestCase):
             self.assertEqual(r.returncode, 0, r.stderr)
             self.assertEqual(brightness(self.root, "input5"), want)
 
+    def test_rejects_numbers_too_long_to_be_a_colour_value(self):
+        add_led_group(self.root, "input5", DS4_V2)
+        for big in ("18446744073709551616", "9223372036854775808", "0256", "1000"):
+            r = run("lightbar.sh", big, "0", "0", env=self.env)
+            self.assertEqual(r.returncode, 2, big)
+        self.assertEqual(brightness(self.root, "input5"), [0, 0, 0])
+
+    def test_mac_option_chooses_one_of_two_controllers(self):
+        add_led_group(self.root, "input5", DS4_V2, uniq="aa:bb:cc:dd:ee:ff")
+        add_led_group(self.root, "input6", DS4_V2, uniq="11:22:33:44:55:66")
+        r = run("lightbar.sh", "--mac", "11:22:33:44:55:66", "1", "2", "3", env=self.env)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(brightness(self.root, "input6"), [1, 2, 3])
+        self.assertEqual(brightness(self.root, "input5"), [0, 0, 0])
+
+    def test_mac_option_for_a_controller_that_is_not_there_says_so(self):
+        add_led_group(self.root, "input5", DS4_V2, uniq="aa:bb:cc:dd:ee:ff")
+        r = run("lightbar.sh", "--mac", "99:99:99:99:99:99", "1", "2", "3", env=self.env)
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("not found", r.stderr)
+        self.assertEqual(brightness(self.root, "input5"), [0, 0, 0])
+
     def test_off_turns_every_channel_to_zero(self):
         add_led_group(self.root, "input5", DS4_V2)
         run("lightbar.sh", "255", "255", "255", env=self.env)
@@ -176,6 +198,17 @@ class MeasureLatency(unittest.TestCase):
         self.assertIn("reports: 100", r.stdout)
         self.assertIn("mean interval: 4.000 ms  (250 Hz)", r.stdout)
         self.assertIn("jitter (sd): 0.000 ms", r.stdout)
+
+    def test_bus_and_device_may_be_zero_padded_the_way_lsusb_prints_them(self):
+        with tempfile.TemporaryDirectory() as d:
+            r = run("measure-latency.sh", "--analyze", self.capture(d, 4000), "05", "02")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("mean interval: 4.000 ms", r.stdout)
+
+    def test_a_bus_number_without_a_device_number_is_refused(self):
+        with tempfile.TemporaryDirectory() as d:
+            r = run("measure-latency.sh", "--analyze", self.capture(d, 4000), "5")
+        self.assertEqual(r.returncode, 2)
 
     def test_a_slower_capture_reads_slower(self):
         with tempfile.TemporaryDirectory() as d:
@@ -291,3 +324,16 @@ class InstallUdev(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class MakeLint(unittest.TestCase):
+    @unittest.skipUnless(shutil.which("make"), "make not installed")
+    def test_lint_fails_when_shellcheck_finds_a_problem_and_does_not_claim_it_is_missing(self):
+        with tempfile.TemporaryDirectory() as bin_dir:
+            fake = pathlib.Path(bin_dir, "shellcheck")
+            fake.write_text("#!/bin/sh\necho 'SC0000: a problem'\nexit 1\n")
+            fake.chmod(0o755)
+            e = dict(os.environ, PATH=f"{bin_dir}:{os.environ['PATH']}")
+            r = subprocess.run(["make", "-C", str(ROOT), "lint"], capture_output=True, text=True, env=e)
+        self.assertNotEqual(r.returncode, 0)
+        self.assertNotIn("not installed", r.stdout + r.stderr)
