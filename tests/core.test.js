@@ -48,6 +48,66 @@ test("the d-pad hat decodes to the right directions, and out-of-range values mea
   }
 });
 
+// QRD's manual: Option + Left / Down / Right makes the direction buttons act as D-pad / left stick / right stick.
+// In a stick mode the controller moves an axis instead of the hat: a DualShock 4 sends a stick as two bytes
+// (bytes 0-1 left, 2-3 right; x then y), 0 for left or up, 255 for right or down, around 128 at rest.
+test("in a stick mode the directions are read from the stick axes, in the same order as the hat", () => {
+  const pushes = [
+    [{ x: 0 }, ["left"]], [{ x: 255 }, ["right"]], [{ y: 0 }, ["up"]], [{ y: 255 }, ["down"]],
+    [{ x: 255, y: 0 }, ["up", "right"]], [{ x: 255, y: 255 }, ["right", "down"]],
+    [{ x: 0, y: 255 }, ["down", "left"]], [{ x: 0, y: 0 }, ["left", "up"]],
+  ];
+  for (const [source, xi, yi] of [["left stick", 0, 1], ["right stick", 2, 3]]) {
+    for (const [push, want] of pushes) {
+      const b = usbBytes();
+      if ("x" in push) b[xi] = push.x;
+      if ("y" in push) b[yi] = push.y;
+      const out = MS3.decodeReport(0x01, view(b));
+      assert.deepEqual(out.dirs, want, `${source} ${JSON.stringify(push)}`);
+      assert.equal(out.dirSource, source);
+      assert.deepEqual(down(out), [...want].sort(), `keys lit for ${source} ${JSON.stringify(push)}`);
+    }
+  }
+});
+
+test("a stick is a direction only when pushed well away from the centre", () => {
+  // the real controller rests at 0x80 and 0x7f; the cut-offs sit at 63|64 and 192|193
+  const dirs = (index, value) => MS3.decodeReport(0x01, view(usbBytes({ [index]: value }))).dirs;
+  for (const [index, below, above] of [[0, "left", "right"], [1, "up", "down"], [2, "left", "right"], [3, "up", "down"]]) {
+    assert.deepEqual(dirs(index, 0x80), [], `byte ${index} at 0x80`);
+    assert.deepEqual(dirs(index, 0x7f), [], `byte ${index} at 0x7f`);
+    assert.deepEqual(dirs(index, 64), [], `byte ${index} at 64`);
+    assert.deepEqual(dirs(index, 63), [below], `byte ${index} at 63`);
+    assert.deepEqual(dirs(index, 192), [], `byte ${index} at 192`);
+    assert.deepEqual(dirs(index, 193), [above], `byte ${index} at 193`);
+  }
+});
+
+test("a direction on the hat wins over the sticks, and the d-pad is the source when nothing is pushed", () => {
+  const both = MS3.decodeReport(0x01, view(usbBytes({ 4: 0x00, 0: 255, 3: 255 })));   // up on the hat, sticks pushed right and down
+  assert.deepEqual(both.dirs, ["up"]);
+  assert.equal(both.dirSource, "d-pad");
+  assert.equal(MS3.decodeReport(0x01, view(usbBytes())).dirSource, "d-pad");
+  assert.equal(MS3.decodeReport(0x01, view(usbBytes({ 4: 0x02 }))).dirSource, "d-pad");
+});
+
+test("when both sticks are pushed the left one is reported", () => {
+  const out = MS3.decodeReport(0x01, view(usbBytes({ 0: 0, 2: 255 })));
+  assert.deepEqual(out.dirs, ["left"]);
+  assert.equal(out.dirSource, "left stick");
+});
+
+test("stick directions follow the same offsets as the buttons over Bluetooth", () => {
+  const basic = new Uint8Array(9);
+  basic.fill(128, 0, 4); basic[4] = 0x08; basic[0] = 0;
+  assert.deepEqual(MS3.decodeReport(0x01, view(basic)).dirs, ["left"]);
+  const full = new Uint8Array(77);
+  full.fill(128, 2, 6); full[2 + 4] = 0x08; full[2 + 3] = 255;   // right stick pushed down, two bytes later
+  const out = MS3.decodeReport(0x11, view(full));
+  assert.deepEqual(out.dirs, ["down"]);
+  assert.equal(out.dirSource, "right stick");
+});
+
 test("the Turbo key has no report bit and is never reported pressed", () => {
   const out = MS3.decodeReport(0x01, view(usbBytes({ 4: 0xf8, 5: 0xff, 6: 0xff })));
   assert.equal("turbo" in out.pressed, false);
@@ -112,6 +172,15 @@ test("a report captured from a real Maestro S3 decodes to idle, USB, 100%", () =
 test("hitbox labels follow QRD's manual: 3P and 4P are L1 and R1, 3K and 4K are L2 and R2", () => {
   const want = { square: "1P", triangle: "2P", l1: "3P", r1: "4P", cross: "1K", circle: "2K", l2: "3K", r2: "4K" };
   for (const [id, label] of Object.entries(want)) assert.equal(MS3.KEYS[id].lbl.hitbox, label, id);
+});
+
+test("PlayStation labels are the usual names for the buttons, and every key has one", () => {
+  const want = {
+    left: "◀", down: "▼", right: "▶", up: "▲", square: "□", triangle: "△", l1: "L1", r1: "R1", cross: "✕", circle: "○", l2: "L2", r2: "R2",
+    share: "SHARE", turbo: "TURBO", l3: "L3", options: "OPTION", ps: "PS", r3: "R3", tpad: "TOUCHPAD",
+  };
+  assert.deepEqual(Object.keys(MS3.KEYS).sort(), Object.keys(want).sort());
+  for (const [id, label] of Object.entries(want)) assert.equal(MS3.KEYS[id].lbl.ps, label, id);
 });
 
 test("arcade labels put the hard punch and kick on L1 and L2 and the 3-button macros on R1 and R2", () => {
@@ -214,6 +283,25 @@ test("a change at time zero is still compared with the next one", () => {
   assert.equal(s.bounces, 1);
 });
 
+test("two changes delivered less than a millisecond apart were bunched up by the page, so they are not a bounce", () => {
+  // A controller cannot send reports closer than a millisecond; when the page stalls, queued reports are delivered together.
+  const s = MS3.newStat();
+  MS3.recordChange(s, true, 1000, 12);
+  MS3.recordChange(s, false, 1000.2, 12);   // the order is known, the timing is not
+  assert.deepEqual([s.presses, s.bounces, s.minGap], [1, 0, Infinity]);
+  assert.equal(s.state, false);
+  MS3.recordChange(s, true, 1005, 12);      // measured from the latest change: 4.8 ms
+  assert.equal(s.bounces, 1);
+  assert.ok(Math.abs(s.minGap - 4.8) < 1e-9, `min gap ${s.minGap}`);
+});
+
+test("a gap of exactly a millisecond is a real gap", () => {
+  const s = MS3.newStat();
+  MS3.recordChange(s, true, 2000, 12);
+  MS3.recordChange(s, false, 2001, 12);
+  assert.deepEqual([s.bounces, s.minGap], [1, 1]);
+});
+
 test("repeating the same state in later reports is not a change", () => {
   const s = MS3.newStat();
   for (let t = 0; t < 100; t += 4) MS3.recordChange(s, true, t, 12);
@@ -252,6 +340,24 @@ test("rate meter ignores idle gaps between bursts of reports", () => {
   for (let i = 0; i < 30; i++) m.push(t += 4);
   assert.equal(m.hz, 250);
   assert.equal(m.jitterMs, 0);
+});
+
+test("rate meter ignores reports that were delivered bunched together after a stall", () => {
+  const m = MS3.createRateMeter();
+  let t = 1000;
+  for (let i = 0; i < 40; i++) m.push(t += 4);
+  assert.equal(m.hz, 250);
+  for (let i = 1; i <= 12; i++) m.push(t + 48 + i * 0.05);   // 12 queued reports, delivered 0.05 ms apart
+  const after = [m.hz, m.intervalMs];
+  // only the stall itself (one 48 ms gap) may move the reading: 0.9 * 4 + 0.1 * 48 = 8.4 ms, not the ~2.6 ms the burst would give
+  assert.ok(Math.abs(after[1] - 8.4) < 0.01, `interval ${after[1]}`);
+  assert.equal(after[0], 119);
+});
+
+test("rate meter counts a report exactly a millisecond after the last one", () => {
+  const m = MS3.createRateMeter();
+  for (let i = 0; i < 30; i++) m.push(i);
+  assert.equal(m.hz, 1000);
 });
 
 test("attaching the same device twice delivers each report once", () => {

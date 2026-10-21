@@ -58,6 +58,22 @@
   const HAT = [["up"], ["up", "right"], ["right"], ["right", "down"], ["down"],
     ["down", "left"], ["left"], ["left", "up"], []];
 
+  // With Option + Down or Right the direction buttons move the left or right stick instead of the hat (QRD's manual).
+  // A stick is two bytes, 0 for left or up and 255 for right or down, about 128 at rest.
+  const STICK_PUSH = 64;                          // an axis counts as pushed when it is further than this from the centre
+  const RING = ["up", "right", "down", "left"];   // neighbours in this ring are the diagonals, as in the hat table
+
+  function stickDirs(x, y) {
+    const pushed = new Set();
+    if (x < 128 - STICK_PUSH) pushed.add("left"); else if (x > 128 + STICK_PUSH) pushed.add("right");
+    if (y < 128 - STICK_PUSH) pushed.add("up"); else if (y > 128 + STICK_PUSH) pushed.add("down");
+    for (let i = 0; i < 4; i++) {
+      const a = RING[i], b = RING[(i + 1) % 4];
+      if (pushed.has(a) && pushed.has(b)) return [a, b];
+    }
+    return RING.filter(d => pushed.has(d));
+  }
+
   function decodeBattery(status) {
     const level = status & 0x0f;
     if (status & 0x10) {   // cable bit
@@ -80,15 +96,26 @@
     else if (reportId === 0x11 && data.byteLength >= 2 + 30) { off = 2; transport = "Bluetooth"; }
     else return null;
 
-    const dirs = [...(HAT[data.getUint8(off + 4) & 0x0f] || [])];
+    let dirs = [...(HAT[data.getUint8(off + 4) & 0x0f] || [])];
+    let dirSource = "d-pad";
+    if (!dirs.length) {   // nothing on the hat: the direction buttons may be acting as a stick
+      for (const [source, at] of [["left stick", 0], ["right stick", 2]]) {
+        const pushed = stickDirs(data.getUint8(off + at), data.getUint8(off + at + 1));
+        if (pushed.length) { dirs = pushed; dirSource = source; break; }
+      }
+    }
     const pressed = {};
     for (const [id, k] of Object.entries(KEYS)) {
       if (k.dir) pressed[id] = dirs.includes(id);
       else if (k.b !== undefined) pressed[id] = (data.getUint8(off + k.b) & k.m) !== 0;
     }
     const battery = data.byteLength > off + 29 ? decodeBattery(data.getUint8(off + 29)) : null;
-    return { transport, dirs, pressed, battery };
+    return { transport, dirs, dirSource, pressed, battery };
   }
+
+  // A controller cannot send reports closer together than this (USB polls at most once a millisecond). Reports that
+  // seem closer were queued while the page was busy and delivered together, so their timing says nothing.
+  const MIN_REPORT_GAP_MS = 1;
 
   const newStat = () => ({ presses: 0, bounces: 0, last: null, state: false, minGap: Infinity });
 
@@ -96,8 +123,10 @@
     if (on === s.state) return;
     if (s.last !== null) {
       const gap = now - s.last;
-      if (gap < s.minGap) s.minGap = gap;
-      if (gap < bounceMs) s.bounces++;
+      if (gap >= MIN_REPORT_GAP_MS) {
+        if (gap < s.minGap) s.minGap = gap;
+        if (gap < bounceMs) s.bounces++;
+      }
     }
     if (on) s.presses++;
     s.last = now;
@@ -116,7 +145,7 @@
       push(t) {
         if (last !== null) {
           const dt = t - last;
-          if (dt > 0 && dt <= maxGapMs) {
+          if (dt >= MIN_REPORT_GAP_MS && dt <= maxGapMs) {
             const dev = interval ? Math.abs(dt - interval) : 0;
             interval = interval ? interval * 0.9 + dt * 0.1 : dt;
             jitter = jitter * 0.9 + dev * 0.1;
