@@ -4,7 +4,8 @@ Static analysis of QRD's firmware updater package, 2026-10-20. Nothing was run o
 
 ## Summary
 
-- The controller appears to be built on an **Actions Semiconductor** chip that runs the **Zephyr RTOS**.
+- The controller appears to be built on an **Actions Semiconductor** chip (judging by the update tool's drivers and file names)
+  that runs the **Zephyr RTOS** (judging by a `ZEPHYR.BIN` entry in the firmware container's file table).
 - The firmware image looks **obfuscated or encrypted**. We looked no further than that.
 - **No custom firmware was attempted, and none is planned.** The only thing it would add is control of the button
   backlights from a PC, and the stock firmware already sets those with L3 + R3.
@@ -56,7 +57,9 @@ Public sandbox reports of XRed samples list the same payload addresses and the `
 
 **Limits.** This is static analysis. We did not run the file in a sandbox and did not submit it to antivirus engines, and
 QRD may have replaced the download since. Compare the hashes above with the file you have, or look the hash up on a
-scanning service, before drawing a conclusion.
+scanning service, before drawing a conclusion. A different hash does not make your copy clean: the file may have been
+replaced, or altered. The two sandbox reports above refused automated clients (HTTP 403 and 401) when we checked, so open
+them in a browser.
 
 **If you have run it on Windows,** run a full antivirus scan and look for a `Synaptics` folder under `C:\ProgramData`, a
 `Synaptics` startup entry, and unexpected `autorun.inf` files on USB drives. Change passwords you typed on that machine

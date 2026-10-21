@@ -3,10 +3,12 @@
 A browser dashboard and a Linux toolkit for the **QRD Maestro S3** leverless controller.
 It is an unofficial project: QRD did not make or endorse it.
 
-Nothing here flashes firmware or changes the controller's saved settings. The dashboard reads
-the controller's input. The only thing it can send is the standard indicator-LED command that
-games send too, over USB, when you click **Send to controller**. The tools in `re/` only ask the
-controller to report; they never change what it stores.
+Nothing here flashes firmware or writes the controller's saved settings. The dashboard reads the
+controller's input; the only thing it can send is the standard indicator-LED command that games
+send too, over USB, when you click **Send to controller**. The tools in `re/` only read: they ask
+the controller to report (HID GET_FEATURE, which the HID specification defines as free of side
+effects), and on the unit tested they changed nothing. The dashboard makes one such read when it
+connects; over Bluetooth that read is what makes a DualShock 4 send its full input reports.
 
 ![The dashboard in demo mode](docs/dashboard.png)
 
@@ -40,7 +42,8 @@ What it shows:
 - The controller must be in its default **D-input** mode, where it appears as a DualShock 4 (USB id `054C:09CC`).
   In **X-Input** mode (Option + Share for 3 s) it is not visible to the page. Only DualShock 4 class controllers are offered;
   other gamepads, such as a PS5 DualSense, use a different report layout and are not supported.
-- Over Bluetooth the dashboard reads the buttons but cannot set the LED.
+- Over Bluetooth the dashboard reads the buttons but cannot set the LED. Bluetooth support follows the DualShock 4 protocol and
+  is tested with synthetic reports only; it has not been tried on a real controller.
 - On Linux, if the browser cannot open the device, install the udev rules below.
 - The dashboard sees what the controller sends, not what you hold. Where the controller cancels two directions, the page cannot know you pressed them.
 
@@ -54,9 +57,10 @@ Details, with how each was measured, are in [`re/FINDINGS.md`](re/FINDINGS.md).
   or with the dashboard's report rate.
 - It presents itself as a DualShock 4 v2. The firmware build string it reports (June 2017) is a DualShock 4
   string, not necessarily its own build date.
-- We found no sign of the SOCD, turbo, macro, remap or LED settings in the controller's feature reports,
-  and QRD ships no configuration app. `re/snapshot.py` lets you test any one setting yourself;
-  we have not run it for every setting.
+- We saw no trace of the SOCD, turbo, macro, remap or LED settings in a dump of the controller's feature reports.
+  One dump cannot show settings by itself, so that is weak evidence: `re/snapshot.py` can test it (change one setting,
+  save again, diff) and we have not done that yet. We found no configuration software from QRD; the only PC program
+  on its site is the firmware updater.
 - **A warning about QRD's V1.05 firmware updater.** The download we fetched on 2026-10-20 contained
   indicators matching the XRed worm. Static analysis only, nothing was run; hashes and how to check
   are in [`re/FIRMWARE-NOTES.md`](re/FIRMWARE-NOTES.md). Do not run it before checking.
@@ -67,29 +71,40 @@ Details, with how each was measured, are in [`re/FINDINGS.md`](re/FINDINGS.md).
 |------|--------------|-------|
 | `tools/install-udev.sh` | Installs udev rules for your controller: stable names `/dev/input/qrd-maestro-s3` and `/dev/qrd-maestro-s3-hidraw`, browser and LED access, and hides the unused motion and touchpad nodes from desktop input stacks | sudo. `--print` previews, `--remove` undoes, `--uinput` adds what the filter needs |
 | `tools/measure-latency.sh` | The real report rate over USB, from usbmon. `--analyze FILE` reads a saved capture | sudo to capture |
-| `tools/debounce.py` | Chatter filter: swallows button and direction double-fires and re-publishes a clean virtual pad. Runs on your computer; the controller is untouched | python-evdev, uinput access |
+| `tools/debounce.py` | Chatter filter: swallows double-fires on the buttons, the d-pad and L2/R2 (3K and 4K) and re-publishes a clean virtual pad. Runs on your computer; the controller is untouched | python-evdev, uinput access |
 | `tools/lightbar.sh` | Sets the indicator LED through the kernel; `battery` colours it by charge | the udev rules, or sudo |
 | `tools/sdl-mapping.sh` | Prints an SDL2 game controller mapping line (`dist/maestro-s3-sdl.txt` is its output) | none |
-| `re/identify.py` | Prints the controller's Bluetooth MAC, the host it is paired with, and its firmware build string | none |
-| `re/dump_features.py` | Lists every HID feature report the controller declares and what it answers | none |
-| `re/snapshot.py` | Save every feature report, change one setting on the controller, save again, diff | none |
+| `re/identify.py` | Prints the controller's Bluetooth MAC, the host it is paired with, and its firmware build string | read access to the hidraw node (the udev rules give it) |
+| `re/dump_features.py` | Lists every HID feature report the controller declares and what it answers | the same |
+| `re/snapshot.py` | Save every feature report, change one setting on the controller, save again, diff | the same |
 
 The controller looks like a real DualShock 4 to the system, so the udev rules for the input names, the LED files and the
 `/dev/qrd-maestro-s3-hidraw` name are keyed to **your controller's Bluetooth MAC** and leave other controllers alone. The one
 exception is read access to `/dev/hidraw*`, which the browser needs and which applies to every DualShock 4 v2: the driver
 learns the MAC only after that node exists. (On a fresh plug the hidraw name can be missed for the same reason;
 `sudo udevadm trigger --subsystem-match=hidraw` applies it.) `tools/install-udev.sh` finds it when one controller is connected;
-otherwise pass it with `--mac AA:BB:CC:DD:EE:FF` (`python3 re/identify.py` prints it). The rules make the LED files
-writable by every local user; delete that rule if you share the machine.
+otherwise pass it with `--mac AA:BB:CC:DD:EE:FF` (`python3 re/identify.py` prints it). We have seen one unit and its
+address looks like a placeholder, so other units may share it; if they do, the rules cannot tell two Maestros apart.
 
-`tools/debounce.py` only helps programs that read evdev. Steam and most recent games use SDL's HIDAPI driver, which reads
-`/dev/hidraw` directly and bypasses the filter; start those with `SDL_JOYSTICK_HIDAPI=0`.
+The rules make the LED files writable by every local user. `--remove` deletes the rules but cannot close files that are
+already open: reconnect the controller afterwards. `--uinput` lets any program you run create virtual keyboards, mice and
+gamepads, and so inject input; it also needs `sudo modprobe uinput` if `/dev/uinput` does not exist.
+
+`debounce.py` and `lightbar.sh` take `--mac` to choose one of several controllers; without it they (and the `re/` tools) use
+the first one they find.
+
+`tools/debounce.py` has three limits. It only helps programs that read evdev: Steam and most recent games use SDL's HIDAPI
+driver, which reads `/dev/hidraw` directly and bypasses the filter, so start those with `SDL_JOYSTICK_HIDAPI=0`. It sees a
+switch change at most once per controller report, so it can only act on glitches longer than that: 16 ms in the default
+latency mode, 4 ms after Option + 4K (see Findings). And stick axes pass through unfiltered, so directions are not filtered if
+you switch the direction buttons to left or right stick mode.
 
 ## Controller shortcuts
 
 From QRD's [Maestro S3 manual](https://qrdgame.com/pages/qrd-maestro-s3-manual) and its
 [firmware 1.05 notes](https://qrdgame.com/blogs/software/qrd-maestro-s3-version-1-05) (that page also links the updater
-discussed in [`re/FIRMWARE-NOTES.md`](re/FIRMWARE-NOTES.md); read the advisory there before running it). All of these are stored on the controller.
+discussed in [`re/FIRMWARE-NOTES.md`](re/FIRMWARE-NOTES.md); read the advisory there before running it). The manual says the SOCD mode,
+direction mode, latency mode and turbo are saved on the controller; it does not say so for the LED colours, X-Input mode or pairing.
 
 | Combo | Function |
 |-------|----------|

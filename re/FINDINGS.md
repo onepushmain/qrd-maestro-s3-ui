@@ -2,7 +2,7 @@
 
 Measured on one unit on 2026-10-20, on Linux with the `hid-playstation` driver, using read-only HID requests and
 USB captures. Where something comes from QRD's printed manual or its firmware 1.05 notes rather than from a
-measurement, it says so.
+measurement, it says so. Everything about Bluetooth comes from the DualShock 4 protocol, not from this controller.
 
 ## Identity
 
@@ -10,7 +10,7 @@ measurement, it says so.
 |---|---|
 | USB id | `054C:09CC`, a Sony DualShock 4 v2 |
 | HID descriptor | 507 bytes: input report `0x01`, output report `0x05`, 48 feature reports (a copy is in `tests/fixtures/`) |
-| Bluetooth MAC | Different on every unit. `re/identify.py` prints it (feature report `0x12`, bytes 1 to 6, least significant byte first) |
+| Bluetooth MAC | `re/identify.py` prints it (feature report `0x12`, bytes 1 to 6, least significant byte first). We have seen one unit, and its address looks like a placeholder (a multicast first byte and ascending trailing bytes), so other units may share it |
 | Firmware build string | `Jun  9 2017 12:36:41` (feature report `0xA3`). The Maestro S3 was released in 2024, so this is almost certainly a DualShock 4 string the firmware reports, not its own build date |
 | Linux | Three evdev nodes (gamepad, motion sensors, touchpad), an LED set and a battery |
 
@@ -20,18 +20,19 @@ USB report `0x01`, with the report id already removed (this is what WebHID and `
 
 | Byte | Content |
 |------|---------|
-| 0 to 3 | Sticks (not present on this controller) |
+| 0 to 3 | Sticks. There are none, but the direction buttons can be switched to act as the left or right stick (Option + Down or Right) and then arrive here |
 | 4 | Low nibble: d-pad hat, 0 up, 1 up-right, 2 right, 3 right-down, 4 down, 5 down-left, 6 left, 7 left-up, 8 neutral. High nibble: square `0x10`, cross `0x20`, circle `0x40`, triangle `0x80` |
 | 5 | L1 `0x01`, R1 `0x02`, L2 `0x04`, R2 `0x08`, Share `0x10`, Options `0x20`, L3 `0x40`, R3 `0x80` |
 | 6 | Home `0x01`, touchpad click `0x02`, the top six bits are a frame counter |
 | 7, 8 | L2 and R2 as analog values |
 | 29 | Battery: low nibble is the level, bit 4 is set while charging |
 
-Over Bluetooth the controller first sends a 9-byte report `0x01` with only the first few fields; after a
-read of feature report `0x02` it sends report `0x11`, which carries the same fields two bytes later.
+Over Bluetooth a DualShock 4 first sends a 9-byte report `0x01` with only the first few fields; after a read of
+feature report `0x02` it sends report `0x11`, which carries the same fields two bytes later. That is known DualShock 4
+behaviour; it was not measured on this controller, and `core.js` handles it with synthetic reports.
 
-The direction buttons arrive as the hat, so what the page sees is the result **after** the controller's own SOCD
-cleaning. The Turbo button is handled inside the controller and has no bit in the report.
+In the default D-pad mode the direction buttons arrive as the hat, so what the page sees is the result **after** the
+controller's own SOCD cleaning. The Turbo button is handled inside the controller and has no bit in the report.
 
 **Battery.** The kernel reads it as `level * 10 + 5`, capped at 100, and `core.js` does the same. On this unit the
 charging bit was set while it charged (55% at the time) and clear while it sat on USB at full charge: the kernel then
@@ -49,12 +50,13 @@ The descriptor declares 48 feature reports but only 7 give distinct answers (`re
 
 ## Where the settings live
 
-We found no sign of the SOCD mode, turbo, macros, remaps, latency mode or LED settings in these reports, and QRD
-ships no configuration software (its only PC program is the firmware updater). So they appear to be stored in the
-controller and changed with button combinations only.
+We saw no trace of the SOCD mode, turbo, macros, remaps, latency mode or LED settings in a dump of these reports, and
+we found no configuration software from QRD (the only PC program on its site is the firmware updater). That points to
+settings that are kept in the controller and changed with button combinations only.
 
-That is a negative result from looking, not a proof. `re/snapshot.py` can settle it for any one setting: save, change
-that setting on the controller with its combination, save again, and diff. We have not done this for every setting.
+It is weak evidence: one dump cannot show a setting. `re/snapshot.py` can settle it for any one setting: save, change
+that setting on the controller with its combination, save again, and diff. We have not run that diff for any setting yet.
+The manual says only the SOCD mode, direction mode, latency mode and turbo are saved on the controller.
 
 ## Latency
 
