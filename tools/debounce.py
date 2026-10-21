@@ -25,21 +25,23 @@ def build_parser():
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0], formatter_class=argparse.RawTextHelpFormatter)
     parser.add_argument("--window", type=float, default=8.0, metavar="MS", help="hold-back window in milliseconds (default 8)")
     parser.add_argument("--device", metavar="PATH", help="evdev node to filter (default: find the controller)")
+    parser.add_argument("--mac", metavar="AA:BB:CC:DD:EE:FF", help="with several controllers connected, the one with this MAC (re/identify.py prints it)")
     return parser
 
 
-def open_source(evdev, path):
+def open_source(evdev, path, mac):
     if path:
         return evdev.InputDevice(path)
     found = None
     for candidate in evdev.list_devices():
         dev = evdev.InputDevice(candidate)
-        if found is None and is_maestro(dev.name, dev.info.vendor, dev.info.product):
+        wanted = is_maestro(dev.name, dev.info.vendor, dev.info.product) and (not mac or (dev.uniq or "").lower() == mac)
+        if found is None and wanted:
             found = dev
         else:
             dev.close()
     if found is None:
-        sys.exit("debounce: Maestro S3 not found. Connect it, or pass --device /dev/input/eventN.")
+        sys.exit("debounce: Maestro S3 not found" + (f" with MAC {mac}" if mac else "") + ". Connect it, or pass --device /dev/input/eventN.")
     return found
 
 
@@ -53,15 +55,16 @@ def main(argv=None):
     except ImportError:
         sys.exit("debounce: python-evdev is not installed (your distribution's python-evdev package, or pip install --user evdev)")
 
-    src = open_source(evdev, args.device)
+    src = open_source(evdev, args.device, (args.mac or "").lower())
     caps = src.capabilities(absinfo=True)
     caps.pop(e.EV_SYN, None)
     caps.pop(e.EV_FF, None)   # the virtual pad does not answer rumble requests, so do not offer them
     try:
         ui = evdev.UInput(caps, name="QRD Maestro S3 (debounced)", vendor=src.info.vendor,
                           product=src.info.product, version=src.info.version)
-    except PermissionError:
-        sys.exit("debounce: no permission to create virtual devices (install the rules with --uinput, or run with sudo)")
+    except (PermissionError, evdev.UInputError) as err:   # python-evdev reports a missing or unwritable /dev/uinput as UInputError
+        sys.exit(f"debounce: cannot create the virtual pad ({err}). Install the rules with tools/install-udev.sh --uinput "
+                 "(and run `sudo modprobe uinput` if /dev/uinput does not exist), or run this with sudo.")
     try:
         src.grab()
     except OSError:
@@ -71,6 +74,8 @@ def main(argv=None):
     flt = Filter(args.window / 1000.0)
     signal.signal(signal.SIGTERM, signal.default_int_handler)
     print(f"Filtering {src.path} -> {ui.device.path} (window {args.window:g} ms). Ctrl-C to stop.")
+    print("Note: a switch change is seen at most once per controller report, 16 ms apart in the default latency mode, "
+          "so shorter glitches get through. Switch the controller to its fast mode first (Option + 4K; see the README).")
 
     def apply(actions):
         for action in actions:

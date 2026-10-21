@@ -15,21 +15,19 @@ from debounce_core import Debouncer  # noqa: E402
 W = 0.008   # 8 ms hold-back window
 
 
-def run(events, window=W):
-    """Replay (time, key, value) events the way the filter's loop does; return (emit_time, key, value)."""
-    d, out, spins = Debouncer(window), [], 0
-
-    def settle(until):
-        nonlocal spins
-        while (deadline := d.next_deadline()) is not None and (until is None or deadline <= until):
-            spins += 1
-            assert spins < 1000, "the debouncer keeps reporting a deadline it never clears"
-            out.extend((deadline, k, v) for k, v in d.due(deadline))
-
-    for t, key, value in events:
-        settle(t)
-        out.extend((t, k, v) for k, v in d.change(key, value, t))
-    settle(None)
+def run(events, window=W, lateness=0.0):
+    """Replay (time, key, value) events the way the filter's loop does: sleep until the next event or hold-back
+    deadline (waking `lateness` seconds late), feed everything that has arrived, then ask what is due.
+    Returns (emit_time, key, value)."""
+    d, out, pending, spins = Debouncer(window), [], list(events), 0
+    while pending or d.next_deadline() is not None:
+        spins += 1
+        assert spins < 10000, "the debouncer keeps reporting a deadline it never clears"
+        wake = min(t for t in (pending[0][0] if pending else None, d.next_deadline()) if t is not None) + lateness
+        while pending and pending[0][0] <= wake:
+            _, key, value = pending.pop(0)
+            out.extend((wake, k, v) for k, v in d.change(key, value, wake))
+        out.extend((wake, k, v) for k, v in d.due(wake))
     return out
 
 
@@ -91,22 +89,22 @@ class Debounce(unittest.TestCase):
     def test_a_first_event_equal_to_the_resting_state_is_ignored(self):
         self.assertEqual(Debouncer(W).change("a", 0, 0.0), [])
 
-    def test_random_chatter_never_leaves_an_input_stuck_or_double_fires(self):
+    def test_random_chatter_never_leaves_an_input_stuck_or_double_fires_however_late_the_loop_wakes(self):
         rng = random.Random(1234)
-        for _ in range(300):
-            t, events = 0.0, []
-            for _ in range(rng.randint(1, 14)):
-                t += rng.choice([0.0005, 0.002, 0.004, 0.009, 0.05])
-                events.append((t, "k", rng.randint(0, 1)))
-            out = run(events)
-            forwarded, previous, last_time = [v for _, _, v in out], 0, None
-            for emit_time, _, v in out:
-                self.assertNotEqual(v, previous, f"repeated {v} in {events}")
-                if last_time is not None:
-                    self.assertGreaterEqual(emit_time - last_time, W - 1e-9, f"too close in {events}")
-                previous, last_time = v, emit_time
-            self.assertEqual(previous, events[-1][2], f"stuck in {previous}, real state {events[-1][2]}: {events}")
-            self.assertEqual(len(forwarded), len(out))
+        for lateness in (0.0, 0.0005, 0.002, 0.007):
+            for _ in range(150):
+                t, events = 0.0, []
+                for _ in range(rng.randint(1, 14)):
+                    t += rng.choice([0.0005, 0.002, 0.004, 0.009, 0.05])
+                    events.append((t, "k", rng.randint(0, 1)))
+                out = run(events, lateness=lateness)
+                previous, last_time = 0, None
+                for emit_time, _, v in out:
+                    self.assertNotEqual(v, previous, f"repeated {v} (late {lateness}) in {events}")
+                    if last_time is not None:
+                        self.assertGreaterEqual(emit_time - last_time, W - 1e-9, f"too close (late {lateness}) in {events}")
+                    previous, last_time = v, emit_time
+                self.assertEqual(previous, events[-1][2], f"stuck in {previous} (late {lateness}), real state {events[-1][2]}: {events}")
 
 
 import debounce_core as core
@@ -151,8 +149,11 @@ class FilterRouting(unittest.TestCase):
             self.assertEqual(f.feed(EV_ABS, code, 255, 0.004), [], code)    # back to the forwarded value: dropped
             self.assertEqual(f.due(1.0), [], code)
 
-    def test_key_repeat_is_not_a_switch_change(self):
-        self.assertEqual(core.Filter(W).feed(EV_KEY, BTN_SOUTH, 2, 0.0), [("event", EV_KEY, BTN_SOUTH, 2)])
+    def test_key_repeat_is_never_held_back(self):
+        f = core.Filter(W)
+        f.feed(EV_KEY, BTN_SOUTH, 1, 0.0)
+        for t in (0.001, 0.002):   # inside the window, where a switch change would be swallowed
+            self.assertEqual(f.feed(EV_KEY, BTN_SOUTH, 2, t), [("event", EV_KEY, BTN_SOUTH, 2)])
 
     def test_it_counts_the_changes_it_swallowed(self):
         f = core.Filter(W)
