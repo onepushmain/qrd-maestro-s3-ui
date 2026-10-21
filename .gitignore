@@ -1,0 +1,11 @@
+# Dumps and snapshots from a specific controller (contain its MAC and auth data)
+re/baseline.json
+re/*.json
+*.json
+!dist/*.json
+
+# Runtime / local
+server.log
+__pycache__/
+*.pyc
+_preview.html

@@ -1,0 +1,23 @@
+# udev rules for the QRD Maestro S3 (enumerates as DS4 054C:09CC).
+# Matches the DS4 v2 USB id the Maestro S3 uses. A genuine DualShock 4 matches too; that is harmless.
+# To limit it to one unit, add  ATTRS{uniq}=="<its MAC from re/identify.py>"  to the input rules.
+# Install:  sudo cp dist/70-qrd-maestro-s3.rules /etc/udev/rules.d/
+#           sudo udevadm control --reload && sudo udevadm trigger
+# Remove:   sudo rm /etc/udev/rules.d/70-qrd-maestro-s3.rules  (then reload)
+
+# Stable names: /dev/input/qrd-maestro-s3 (gamepad) and /dev/qrd-maestro-s3-hidraw
+SUBSYSTEM=="input", KERNEL=="event*", ATTRS{id/vendor}=="054c", ATTRS{id/product}=="09cc", ATTRS{name}=="*Wireless Controller", \
+  SYMLINK+="input/qrd-maestro-s3", ENV{ID_MODEL}="QRD_Maestro_S3", ENV{ID_VENDOR}="QRD"
+# hidraw and LEDs hang off the HID device, which has no uniq attr, so these match any DS4 v2
+# (USB 0003 or Bluetooth 0005) driven by hid-playstation. Harmless for a genuine DS4.
+SUBSYSTEM=="hidraw", KERNELS=="000[35]:054C:09CC.*", DRIVERS=="playstation", SYMLINK+="qrd-maestro-s3-hidraw", TAG+="uaccess"
+
+# Tell desktop input stacks to ignore the phantom motion + touchpad nodes a leverless never uses.
+SUBSYSTEM=="input", KERNEL=="event*", ATTRS{id/vendor}=="054c", ATTRS{id/product}=="09cc", ATTRS{name}=="*Motion Sensors", ENV{LIBINPUT_IGNORE_DEVICE}="1"
+SUBSYSTEM=="input", KERNEL=="event*", ATTRS{id/vendor}=="054c", ATTRS{id/product}=="09cc", ATTRS{name}=="*Touchpad", ENV{LIBINPUT_IGNORE_DEVICE}="1"
+
+# Build 6: let the logged-in user set the lightbar without sudo.
+SUBSYSTEM=="leds", KERNELS=="000[35]:054C:09CC.*", DRIVERS=="playstation", RUN+="/bin/chmod 0666 /sys%p/brightness"
+
+# Build 5: let the logged-in user create the debounced virtual pad.
+KERNEL=="uinput", SUBSYSTEM=="misc", TAG+="uaccess"
