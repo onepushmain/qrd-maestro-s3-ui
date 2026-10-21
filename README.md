@@ -87,7 +87,9 @@ writable by every local user; delete that rule if you share the machine.
 
 ## Controller shortcuts
 
-From QRD's printed manual and the firmware 1.05 notes. All of these are stored on the controller.
+From QRD's [Maestro S3 manual](https://qrdgame.com/pages/qrd-maestro-s3-manual) and its
+[firmware 1.05 notes](https://qrdgame.com/blogs/software/qrd-maestro-s3-version-1-05) (that page also links the updater
+discussed in [`re/FIRMWARE-NOTES.md`](re/FIRMWARE-NOTES.md); read the advisory there before running it). All of these are stored on the controller.
 
 | Combo | Function |
 |-------|----------|
