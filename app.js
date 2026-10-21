@@ -233,6 +233,19 @@
     $("connect").textContent = "Reconnect";
   }
 
+  // Nothing arrives any more, so nothing may stay lit or keep showing the last reading.
+  function markDisconnected() {
+    binding.detach();
+    device = null;
+    $("statusDot").className = "dot";
+    $("statusText").textContent = "Disconnected";
+    document.querySelectorAll(".key.on").forEach(k => k.classList.remove("on"));
+    for (const id of hardwareKeys) stats[id].state = false;
+    $("dirName").textContent = "Neutral";
+    $("rateChip").hidden = true;
+    for (const id of ["rate", "interval", "jitter", "battery", "transport"]) $(id).textContent = "—";
+  }
+
   function report(err) {
     showError(`Could not open the controller: ${err.message}. Close anything else using it (Steam, a game, another browser tab) and try again.`);
   }
@@ -259,13 +272,7 @@
     $("connect").disabled = true;
     showError("This browser has no WebHID, so it cannot read the controller. Use Chrome, Edge, Brave or Helium, opened from http://localhost or an https address. Firefox and Safari do not support WebHID.");
   } else {
-    navigator.hid.addEventListener("disconnect", e => {
-      if (e.device !== device) return;
-      binding.detach();
-      device = null;
-      $("statusDot").className = "dot";
-      $("statusText").textContent = "Disconnected";
-    });
+    navigator.hid.addEventListener("disconnect", e => { if (e.device === device) markDisconnected(); });
     navigator.hid.addEventListener("connect", e => { if (!device && isGamepad(e.device)) attach(e.device).catch(report); });
     navigator.hid.getDevices().then(list => { const d = list.find(isGamepad); if (d) attach(d).catch(report); });
   }

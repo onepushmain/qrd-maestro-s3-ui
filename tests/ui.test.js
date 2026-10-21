@@ -190,3 +190,79 @@ test("without WebHID the page says so up front and disables Connect", { skip }, 
   assert.match(await ev(`document.querySelector("#errbox").textContent`), /WebHID/);
   assert.equal(await ev(`document.querySelector("#connect").disabled`), true);
 });
+
+// ---- the real WebHID path, with a fake navigator.hid injected before the page loads ----
+const FAKE_HID = `(() => {
+  const hid = new EventTarget(), dev = new EventTarget();
+  Object.assign(dev, { vendorId: 0x054c, productId: 0x09cc, productName: "Wireless Controller", opened: false,
+    collections: [{ usagePage: 1, usage: 5 }],
+    async open() { if (window.__failOpen) throw new Error("access denied"); this.opened = true; },
+    async receiveFeatureReport() { throw new Error("not needed on USB"); } });
+  const headset = new EventTarget();   // a Sony device that is not a gamepad
+  Object.assign(headset, { vendorId: 0x054c, productId: 0x0ce6, productName: "Sony Headset", opened: false,
+    collections: [{ usagePage: 0xff00, usage: 1 }], async open() { this.opened = true; }, async receiveFeatureReport() {} });
+  window.__fake = {
+    dev, filters: null, granted: !window.__notGranted,
+    send(patch = {}) {   // a USB input report: sticks centred, hat neutral, then whatever bytes the test sets
+      const b = new Uint8Array(63); b.fill(128, 0, 4); b[4] = 0x08;
+      for (const [i, v] of Object.entries(patch)) b[i] = v;
+      const ev = new Event("inputreport"); ev.reportId = 1; ev.data = new DataView(b.buffer); dev.dispatchEvent(ev);
+    },
+    fire(type) { const ev = new Event(type); ev.device = dev; hid.dispatchEvent(ev); },
+  };
+  hid.getDevices = async () => (window.__fake.granted ? (window.__withHeadset ? [headset, dev] : [dev]) : []);
+  hid.requestDevice = async opts => { window.__fake.filters = opts.filters; window.__fake.granted = true; return [dev]; };
+  Object.defineProperty(Navigator.prototype, "hid", { get: () => hid, configurable: true });
+})();`;
+const attached = `document.querySelector("#statusText").textContent === "Wireless Controller"`;
+const isOn = id => ev(`document.querySelector("#key_${id}").classList.contains("on")`);
+
+test("a controller the browser already trusts is attached on load and its presses light the drawing", { skip }, async () => {
+  await open("/", { beforeLoad: FAKE_HID });
+  await waitFor(attached);
+  await ev(`window.__fake.send({ 4: 0x18 })`);   // square
+  assert.equal(await isOn("square"), true);
+  await ev(`window.__fake.send({})`);
+  assert.equal(await isOn("square"), false);
+  await ev(`for (let i = 0; i < 5; i++) window.__fake.send({})`);
+  await waitFor(`document.querySelector("#transport").textContent === "USB"`);
+});
+
+test("unplugging clears the lit keys and the readings, and plugging back in reconnects", { skip }, async () => {
+  await open("/", { beforeLoad: FAKE_HID });
+  await waitFor(attached);
+  await ev(`window.__t = setInterval(() => window.__fake.send({ 4: 0x18, 5: 0x02 }), 4)`);   // square and R1 held, streaming
+  await waitFor(`document.querySelector("#rate").textContent !== "—"`);                        // a live reading is on screen
+  await ev(`clearInterval(window.__t)`);
+  await ev(`window.__fake.fire("disconnect")`);
+  assert.equal(await ev(`document.querySelector("#statusText").textContent`), "Disconnected");
+  assert.equal(await ev(`document.querySelectorAll(".key.on").length`), 0);
+  assert.equal(await ev(`document.querySelector("#rate").textContent`), "—");
+  await ev(`window.__fake.send({ 4: 0x18 })`);                 // a late report from the old connection must be ignored
+  assert.equal(await ev(`document.querySelectorAll(".key.on").length`), 0);
+  await ev(`window.__fake.fire("connect")`);
+  await waitFor(attached);
+  await ev(`window.__fake.send({ 4: 0x18 })`);
+  assert.equal(await isOn("square"), true);
+});
+
+test("Connect asks the browser for a Sony gamepad, nothing broader", { skip }, async () => {
+  await open("/", { beforeLoad: `window.__notGranted = true;` + FAKE_HID });
+  assert.equal(await ev(`document.querySelector("#statusText").textContent`), "Disconnected");
+  await ev(`document.querySelector("#connect").click()`);
+  await waitFor(attached);
+  assert.deepEqual(await ev(`window.__fake.filters`), [{ vendorId: 0x054c, usagePage: 1, usage: 5 }]);
+});
+
+test("a device that cannot be opened is explained, not silently ignored", { skip }, async () => {
+  await open("/", { beforeLoad: `window.__failOpen = true;` + FAKE_HID });
+  await waitFor(`!document.querySelector("#errbox").hidden`);
+  assert.match(await ev(`document.querySelector("#errbox").textContent`), /Could not open the controller: access denied/);
+  assert.equal(await ev(`document.querySelector("#statusText").textContent`), "Disconnected");
+});
+
+test("a Sony device that is not a gamepad is never picked as the controller", { skip }, async () => {
+  await open("/", { beforeLoad: `window.__withHeadset = true;` + FAKE_HID });
+  await waitFor(attached);
+  assert.notEqual(await ev(`document.querySelector("#statusText").textContent`), "Sony Headset");
+});
