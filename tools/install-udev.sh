@@ -11,6 +11,7 @@ set -euo pipefail
 sysfs=${SYSFS:-/sys}
 here=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 rules_dir=/etc/udev/rules.d
+uinput_node=${UINPUT_NODE:-/dev/uinput}
 main_name=70-qrd-maestro-s3.rules
 uinput_name=71-qrd-maestro-s3-uinput.rules
 
@@ -36,6 +37,8 @@ sudo_cmd=()
 reload() {
   "${sudo_cmd[@]}" udevadm control --reload
   "${sudo_cmd[@]}" udevadm trigger --subsystem-match=input --subsystem-match=hidraw --subsystem-match=leds --action=change
+  # /dev/uinput belongs to none of those subsystems, so the line above never reaches it
+  if (( uinput )); then "${sudo_cmd[@]}" udevadm trigger --name-match="$uinput_node" --action=change; fi
 }
 
 if [[ $action == remove ]]; then
@@ -91,4 +94,9 @@ if (( uinput )); then
   "${sudo_cmd[@]}" install -m 0644 "$here/dist/71-qrd-maestro-s3-uinput.rules" "$rules_dir/$uinput_name"
 fi
 reload
-echo "Installed rules for $mac in $rules_dir and reloaded udev. If a name or permission has not appeared, unplug and reconnect the controller."
+echo "Installed rules for $mac in $rules_dir and reloaded udev."
+echo "If /dev/qrd-maestro-s3-hidraw is missing after a fresh plug, run: sudo udevadm trigger --subsystem-match=hidraw"
+if (( uinput )); then
+  echo "--uinput lets any program you run create virtual keyboards, mice and gamepads, and so inject input."
+  [[ -e $uinput_node ]] || echo "$uinput_node does not exist yet: run 'sudo modprobe uinput' (the rule makes the node at the next boot)."
+fi
