@@ -139,23 +139,35 @@
   // ---------- switch health ----------
   const stats = {};
   const hardwareKeys = Object.keys(KEYS).filter(id => !KEYS[id].static);
-  const resetStats = () => { for (const id of hardwareKeys) stats[id] = MS3.newStat(); };
+  // Counts restart from zero, but a button that is held stays held, so it is not counted as a new press.
+  const resetStats = () => { for (const id of hardwareKeys) { const held = stats[id]?.state ?? false; stats[id] = MS3.newStat(); stats[id].state = held; } };
   resetStats();
 
-  function renderHealth() {
+  const healthRows = {};   // key id -> { tr, cells }
+  const setText = (el, text) => { if (el.textContent !== text) el.textContent = text; };
+
+  function buildHealth() {
     const body = $("healthBody");
     body.replaceChildren();
     for (const id of hardwareKeys) {
-      const s = stats[id], tr = document.createElement("tr");
-      tr.className = s.bounces ? "flag" : s.presses ? "ok" : "";
-      const cells = [KEYS[id].lbl[S.labels], s.presses, s.bounces, s.minGap === Infinity ? "—" : s.minGap.toFixed(1), s.bounces ? "CHECK" : s.presses ? "OK" : "—"];
-      cells.forEach((text, i) => {
+      const tr = document.createElement("tr"), cells = [];
+      for (let i = 0; i < 5; i++) {
         const td = document.createElement("td");
-        td.textContent = text;
         if (i === 4) td.className = "health"; else if (i > 0) td.className = "num";
         tr.appendChild(td);
-      });
+        cells.push(td);
+      }
       body.appendChild(tr);
+      healthRows[id] = { tr, cells };
+    }
+  }
+
+  function renderHealth() {
+    for (const id of hardwareKeys) {
+      const s = stats[id], { tr, cells } = healthRows[id], state = s.bounces ? "flag" : s.presses ? "ok" : "";
+      if (tr.className !== state) tr.className = state;
+      const values = [KEYS[id].lbl[S.labels], s.presses, s.bounces, s.minGap === Infinity ? "—" : s.minGap.toFixed(1), s.bounces ? "CHECK" : s.presses ? "OK" : "—"];
+      values.forEach((value, i) => setText(cells[i], String(value)));
     }
   }
 
@@ -174,13 +186,10 @@
       MS3.recordChange(stats[id], down, e.timeStamp, S.bounce);
       if (was !== down) keyEls[id].classList.toggle("on", down);
     }
-    const dir = out.dirs.length ? out.dirs.map(cap).join(" + ") : "Neutral";
+    const dir = out.dirs.length ? out.dirs.map(cap).join(" + ") + (out.dirSource === "d-pad" ? "" : ` (${out.dirSource})`) : "Neutral";
     if (dir !== shown.dir) $("dirName").textContent = shown.dir = dir;
-    if (out.battery) {
-      const { percent, state } = out.battery;
-      const text = percent + "%" + (state === "charging" ? " ⚡" : state === "full" ? " full" : "");
-      if (text !== shown.battery) $("battery").textContent = shown.battery = text;
-    }
+    const battery = out.battery ? out.battery.percent + "%" + (out.battery.state === "charging" ? " ⚡" : out.battery.state === "full" ? " full" : "") : "—";
+    if (battery !== shown.battery) $("battery").textContent = shown.battery = battery;
     if (S.panels.raw) {
       let hex = "ID " + e.reportId.toString(16).padStart(2, "0") + "  ";
       for (let i = 0; i < Math.min(e.data.byteLength, 24); i++) hex += e.data.getUint8(i).toString(16).padStart(2, "0") + " ";
@@ -224,19 +233,31 @@
   const isGamepad = d => d.vendorId === SONY_VENDOR && DS4_PRODUCTS.includes(d.productId) && d.collections.some(c => c.usagePage === 1 && c.usage === 5);
   function showError(message) { const box = $("errbox"); box.textContent = message; box.hidden = false; }
 
+  let opening = null;   // the controller attach() is busy opening
+  const idle = { verdict: $("timingVerdict").textContent, hex: $("hex").textContent };   // what those two show with nothing connected
+
   async function attach(d) {
-    if (!d.opened) await d.open();
-    try { await d.receiveFeatureReport(0x02); }   // a read; over Bluetooth it makes the controller send full reports
-    catch (err) { /* USB controllers and the demo do not need it */ }
-    meter.reset();
-    binding.attach(d);
-    device = d;
-    $("statusDot").className = "dot on";
-    $("statusText").textContent = d.productName || "Wireless Controller";
-    $("intro").hidden = true;
-    $("errbox").hidden = true;
-    $("reset").hidden = false;
-    $("connect").textContent = "Reconnect";
+    if (d === opening) return;
+    opening = d;
+    try {
+      if (!d.opened) await d.open();
+      try { await d.receiveFeatureReport(0x02); }   // a read; over Bluetooth it makes the controller send full reports
+      catch (err) { /* USB controllers and the demo do not need it */ }
+      if (opening !== d) return;                    // it was unplugged, or replaced, while it was being opened
+      meter.reset();
+      binding.attach(d);
+      device = d;
+      $("statusDot").className = "dot on";
+      $("statusText").textContent = d.productName || "Wireless Controller";
+      $("intro").hidden = true;
+      $("errbox").hidden = true;
+      $("reset").hidden = false;
+      $("connect").textContent = "Reconnect";
+    } catch (err) {
+      if (opening === d) throw err;                 // an open that failed because the controller was unplugged is not worth a message
+    } finally {
+      if (opening === d) opening = null;
+    }
   }
 
   // Nothing arrives any more, so nothing may stay lit or keep showing the last reading.
@@ -251,37 +272,61 @@
     shown.battery = "";
     $("rateChip").hidden = true;
     for (const id of ["rate", "interval", "jitter", "battery", "transport"]) $(id).textContent = "—";
+    $("timingVerdict").textContent = idle.verdict;
+    $("healthNote").hidden = true;
+    $("hex").textContent = idle.hex;
   }
 
-  function report(err) {
-    showError(`Could not open the controller: ${err.message}. Close anything else using it (Steam, a game, another browser tab) and try again.`);
+  function openFailed(err) {
+    showError(`Could not open the controller: ${err.message}. Another program may be using it (Steam, a game, another browser tab), or on Linux your browser may lack permission: install the udev rules (see the README) and try again.`);
+  }
+
+  // Look at what is plugged in and use it. Run after every connect or disconnect instead of reacting to each event on
+  // its own, so the order the events arrive in does not matter; the latest scan wins.
+  let scans = 0;
+  async function scan() {
+    const mine = ++scans;
+    let found;
+    try { found = (await navigator.hid.getDevices()).filter(isGamepad); }
+    catch (err) { return; }                         // the Connect button reports why WebHID cannot be used
+    if (mine !== scans) return;
+    const wanted = found.includes(device) ? device : found[0];
+    if (!wanted) { if (device) markDisconnected(); return; }
+    if (wanted !== device) await attach(wanted);
   }
 
   $("connect").addEventListener("click", async () => {
+    let picked;
     try {
-      if (demo) { await attach(demo); return; }
-      const [d] = await navigator.hid.requestDevice({ filters: DS4_PRODUCTS.map(productId => ({ vendorId: SONY_VENDOR, productId, usagePage: 1, usage: 5 })) });
-      if (d) await attach(d);
-    } catch (err) { report(err); }
+      if (demo) picked = demo;
+      else [picked] = await navigator.hid.requestDevice({ filters: DS4_PRODUCTS.map(productId => ({ vendorId: SONY_VENDOR, productId, usagePage: 1, usage: 5 })) });
+    } catch (err) { showError(`Could not ask the browser for a controller: ${err.message}`); return; }
+    if (picked) await attach(picked).catch(openFailed);
   });
   $("reset").addEventListener("click", () => { resetStats(); meter.reset(); renderHealth(); });
 
   buildCase();   // the drawing must exist before the first report arrives
+  buildHealth();
   syncForm();
   applyLook();
 
   if (demo) {
     $("demobar").hidden = false;
     $("intro").hidden = true;
-    attach(demo);
+    attach(demo).catch(openFailed);
   } else if (!("hid" in navigator)) {
     $("intro").hidden = true;
     $("connect").disabled = true;
     showError("This browser has no WebHID, so it cannot read the controller. Use Chrome, Edge, Brave or Helium, opened from http://localhost or an https address. Firefox and Safari do not support WebHID.");
   } else {
-    navigator.hid.addEventListener("disconnect", e => { if (e.device === device) markDisconnected(); });
-    navigator.hid.addEventListener("connect", e => { if (!device && isGamepad(e.device)) attach(e.device).catch(report); });
-    navigator.hid.getDevices().then(list => { const d = list.find(isGamepad); if (d) attach(d).catch(report); });
+    navigator.hid.addEventListener("disconnect", e => {
+      if (!isGamepad(e.device)) return;
+      if (e.device === opening) opening = null;
+      if (e.device === device) markDisconnected();
+      scan().catch(openFailed);   // another controller may be waiting: a USB cable plugged in while on Bluetooth
+    });
+    navigator.hid.addEventListener("connect", e => { if (isGamepad(e.device)) scan().catch(openFailed); });
+    scan().catch(openFailed);
   }
 
   // ---------- indicator LED (DualShock output report 0x05 over USB: runtime state only) ----------

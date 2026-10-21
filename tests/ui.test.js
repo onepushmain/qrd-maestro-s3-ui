@@ -1,126 +1,39 @@
 "use strict";
-// Browser-level tests: the real page in headless Chromium, driven over the DevTools protocol.
-// The page's demo mode (?demo) stands in for a controller, so no hardware is needed.
+// Browser tests of the page itself, in headless Chromium. The page's demo mode (?demo) stands in for a controller.
+// The WebHID path is in ui_hid.test.js and what the page shows for each report is in ui_panels.test.js.
 // Skipped when Chromium or Node's WebSocket client is not available.
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const fs = require("node:fs");
-const os = require("node:os");
-const path = require("node:path");
-const http = require("node:http");
-const { spawn, spawnSync } = require("node:child_process");
+const h = require("./ui_harness");
+const { skip, open, ev, waitFor, sleep } = h;
 
-const ROOT = path.join(__dirname, "..");
-const TYPES = { ".html": "text/html", ".js": "text/javascript", ".css": "text/css", ".png": "image/png", ".svg": "image/svg+xml" };
-const chromium = ["chromium", "chromium-browser", "google-chrome-stable", "google-chrome", "microsoft-edge"]
-  .map(n => spawnSync("which", [n], { encoding: "utf8" })).find(r => r.status === 0)?.stdout.trim();
-const skip = !chromium ? "Chromium not installed" : typeof WebSocket === "undefined" ? "no WebSocket client in this Node" : false;
-
-let server, base, browser, profile, cdp, injected = null;
-const notFound = [];
-const sleep = ms => new Promise(r => setTimeout(r, ms));
-
-function startServer() {
-  server = http.createServer((req, res) => {
-    if (new URL(req.url, "http://x").pathname === "/blank") { res.writeHead(200, { "content-type": "text/html" }).end(`<!doctype html><title>blank</title><link rel="icon" href="data:,">`); return; }
-    const file = path.join(ROOT, path.normalize(new URL(req.url, "http://x").pathname === "/" ? "/index.html" : new URL(req.url, "http://x").pathname));
-    if (!file.startsWith(ROOT) || !fs.existsSync(file) || fs.statSync(file).isDirectory()) { notFound.push(req.url); res.writeHead(404).end(); return; }
-    res.writeHead(200, { "content-type": TYPES[path.extname(file)] || "application/octet-stream" }).end(fs.readFileSync(file));
-  });
-  return new Promise(r => server.listen(0, "127.0.0.1", () => { base = `http://127.0.0.1:${server.address().port}`; r(); }));
-}
-
-async function startBrowser() {
-  profile = fs.mkdtempSync(path.join(os.tmpdir(), "ms3-ui-"));
-  const args = ["--headless=new", "--disable-gpu", "--disable-dev-shm-usage", "--no-first-run", "--disable-extensions",
-    `--user-data-dir=${profile}`, "--remote-debugging-port=0", "about:blank"];
-  if (process.getuid && process.getuid() === 0) args.unshift("--no-sandbox");
-  browser = spawn(chromium, args, { stdio: ["ignore", "ignore", "pipe"] });
-  const port = await new Promise((resolve, reject) => {
-    let buf = "";
-    browser.stderr.on("data", d => { buf += d; const m = buf.match(/DevTools listening on ws:\/\/127\.0\.0\.1:(\d+)/); if (m) resolve(m[1]); });
-    browser.on("exit", () => reject(new Error("Chromium exited early")));
-    setTimeout(() => reject(new Error("Chromium did not start")), 15000);
-  });
-  const targets = await (await fetch(`http://127.0.0.1:${port}/json`)).json();
-  const page = targets.find(t => t.type === "page");
-  const ws = new WebSocket(page.webSocketDebuggerUrl);
-  await new Promise(r => ws.addEventListener("open", r));
-  let id = 0;
-  const pending = new Map(), handlers = [];
-  ws.addEventListener("message", e => {
-    const m = JSON.parse(e.data);
-    if (m.id && pending.has(m.id)) { const { ok, bad } = pending.get(m.id); pending.delete(m.id); m.error ? bad(new Error(m.error.message)) : ok(m.result); }
-    else if (m.method) handlers.forEach(h => h(m.method, m.params));
-  });
-  cdp = {
-    send: (method, params = {}) => new Promise((ok, bad) => { const n = ++id; pending.set(n, { ok, bad }); ws.send(JSON.stringify({ id: n, method, params })); }),
-    on: h => handlers.push(h),
-    close: () => ws.close(),
-  };
-}
-
-// Open a page and collect everything that should never happen: console errors, CSP reports, third-party requests.
-async function open(urlPath, { beforeLoad, storage } = {}) {
-  const seen = { errors: [], requests: [] };
-  cdp.on((method, p) => {
-    if (method === "Runtime.exceptionThrown") seen.errors.push(p.exceptionDetails.text + " " + (p.exceptionDetails.exception?.description || ""));
-    if (method === "Runtime.consoleAPICalled" && p.type === "error") seen.errors.push(p.args.map(a => a.value ?? a.description).join(" "));
-    if (method === "Log.entryAdded" && p.entry.level === "error") seen.errors.push(p.entry.text);
-    if (method === "Network.requestWillBeSent") seen.requests.push(p.request.url);
-  });
-  await Promise.all(["Page", "Runtime", "Log", "Network"].map(d => cdp.send(`${d}.enable`)));
-  if (injected) { await cdp.send("Page.removeScriptToEvaluateOnNewDocument", { identifier: injected }); injected = null; }
-  await cdp.send("Page.navigate", { url: `${base}/blank` });   // a page on the same origin, to set storage on
-  if (storage !== undefined) await ev(`localStorage.setItem("ms3settings", ${JSON.stringify(storage)})`);
-  else await ev(`localStorage.clear()`);
-  if (beforeLoad) injected = (await cdp.send("Page.addScriptToEvaluateOnNewDocument", { source: beforeLoad })).identifier;
-  seen.requests.length = 0;
-  seen.errors.length = 0;
-  notFound.length = 0;
-  await cdp.send("Page.navigate", { url: `${base}${urlPath}` });
-  await waitFor(`document.readyState === "complete"`);
-  return seen;
-}
-
-async function ev(expression) {
-  const r = await cdp.send("Runtime.evaluate", { expression, returnByValue: true, awaitPromise: true });
-  if (r.exceptionDetails) throw new Error(r.exceptionDetails.exception?.description || r.exceptionDetails.text);
-  return r.result.value;
-}
-
-async function waitFor(expression, ms = 6000) {
-  const end = Date.now() + ms;
-  for (;;) {
-    try { const v = await ev(expression); if (v) return v; } catch (e) { /* page still loading */ }
-    if (Date.now() > end) throw new Error(`timed out waiting for: ${expression}`);
-    await sleep(50);
-  }
-}
-
-test.before(async () => { if (!skip) { await startServer(); await startBrowser(); } });
-test.after(async () => {
-  if (skip) return;
-  cdp?.close(); browser?.kill(); server?.close(); fs.rmSync(profile, { recursive: true, force: true });
-});
+test.before(h.setup);
+test.after(h.teardown);
 
 test("demo mode renders the controller with no console errors and no third-party requests", { skip }, async () => {
   const seen = await open("/?demo");
   await waitFor(`document.querySelector("#statusText").textContent.includes("Demo")`);
   assert.equal(await ev(`document.querySelectorAll(".key").length`), 19);
-  const foreign = seen.requests.filter(u => !u.startsWith(base) && !u.startsWith("data:"));
+  const foreign = seen.requests.filter(u => !u.startsWith(h.base) && !u.startsWith("data:"));
   assert.deepEqual(foreign, []);
-  assert.deepEqual(seen.errors, [], `404s: ${notFound.join(", ")}`);
+  assert.deepEqual(seen.errors, [], `404s: ${h.notFound.join(", ")}`);
 });
 
-test("the page's content security policy forbids network requests", { skip }, async () => {
+// Run `js` in the page and report which Content-Security-Policy directive it violated, if any.
+const violation = js => ev(`new Promise(res => {
+  document.addEventListener("securitypolicyviolation", e => res(e.effectiveDirective), { once: true });
+  setTimeout(() => res("no violation"), 1500);
+  ${js}
+})`);
+
+test("the content security policy forbids network requests, remote images, inline scripts and inline styles", { skip }, async () => {
   await open("/?demo");
-  const directive = await ev(`new Promise(res => {
-    document.addEventListener("securitypolicyviolation", e => res(e.effectiveDirective));
-    fetch("https://example.com/").catch(() => {});
-    setTimeout(() => res("no violation"), 2000);
-  })`);
-  assert.equal(directive, "connect-src");
+  assert.equal(await violation(`fetch("https://example.com/").catch(() => {});`), "connect-src");
+  assert.equal(await violation(`new Image().src = "https://example.com/x.png";`), "img-src");
+  assert.equal(await violation(`const s = document.createElement("script"); s.textContent = "window.__ran = true"; document.head.append(s);`), "script-src-elem");
+  assert.equal(await ev(`window.__ran`), undefined);
+  assert.equal(await violation(`const s = document.createElement("style"); s.textContent = "body { display: none }"; document.head.append(s);`), "style-src-elem");
+  assert.notEqual(await ev(`getComputedStyle(document.body).display`), "none");
 });
 
 test("demo mode shows USB at about 250 Hz, lights keys, and reads the battery like the Linux driver", { skip }, async () => {
@@ -157,17 +70,29 @@ test("the settings drawer is out of the tab order until opened, and gives focus 
   await waitFor(`getComputedStyle(document.querySelector("#drawer")).visibility === "visible"`);
   assert.equal(await ev(`document.querySelector("#openSettings").getAttribute("aria-expanded")`), "true");
   assert.equal(await ev(`document.querySelector("#drawer").contains(document.activeElement)`), true);
-  await cdp.send("Input.dispatchKeyEvent", { type: "keyDown", key: "Escape", code: "Escape", windowsVirtualKeyCode: 27 });
+  await h.cdp.send("Input.dispatchKeyEvent", { type: "keyDown", key: "Escape", code: "Escape", windowsVirtualKeyCode: 27 });
   await waitFor(`getComputedStyle(document.querySelector("#drawer")).visibility === "hidden"`);
   assert.equal(await ev(`document.activeElement.id`), "openSettings");
   assert.equal(await ev(`document.querySelector("#openSettings").getAttribute("aria-expanded")`), "false");
 });
 
+const labels = () => ev(`Object.fromEntries([...document.querySelectorAll(".key")].map(k => [k.id.slice(4), k.textContent.trim()]))`);
+
+test("the keys carry PlayStation names by default", { skip }, async () => {
+  await open("/?demo");
+  assert.deepEqual(await labels(), {
+    left: "◀", down: "▼", right: "▶", up: "▲", square: "□", triangle: "△", l1: "L1", r1: "R1",
+    cross: "✕", circle: "○", l2: "L2", r2: "R2", share: "SHARE", turbo: "TURBO", l3: "L3", options: "OPTION",
+    ps: "PS", r3: "R3", tpad: "TOUCHPAD",
+  });
+});
+
 test("choosing the 1P-4K labels relabels the keys like the manual", { skip }, async () => {
   await open("/?demo");
   await ev(`const s = document.querySelector("#sLabels"); s.value = "hitbox"; s.dispatchEvent(new Event("change", { bubbles: true }))`);
-  const text = id => ev(`document.querySelector("#key_${id}").textContent`);
-  assert.deepEqual([await text("l1"), await text("r1"), await text("l2"), await text("r2")], ["3P", "4P", "3K", "4K"]);
+  const now = await labels();
+  assert.deepEqual([now.l1, now.r1, now.l2, now.r2], ["3P", "4P", "3K", "4K"]);
+  assert.deepEqual([now.square, now.triangle, now.cross, now.circle], ["1P", "2P", "1K", "2K"]);
 });
 
 test("settings saved by an older or damaged version never produce blank or undefined labels", { skip }, async () => {
@@ -178,10 +103,37 @@ test("settings saved by an older or damaged version never produce blank or undef
   assert.equal(await ev(`document.querySelector("#sLabels").value`), "ps");
 });
 
+test("every key is drawn where the layout table puts it, as fractions of the case", { skip }, async () => {
+  await open("/?demo");
+  const drawn = await ev(`(() => {
+    const c = document.querySelector("#case").getBoundingClientRect();
+    const frac = el => { const r = el.getBoundingClientRect();
+      return { x: (r.left + r.width / 2 - c.left) / c.width, y: (r.top + r.height / 2 - c.top) / c.height, w: r.width / c.width, h: r.height / c.height }; };
+    const out = { case: c.width / c.height, indicator: frac(document.getElementById("indicator")) };
+    for (const id of Object.keys(MS3.LAYOUT)) out[id] = frac(document.getElementById("key_" + id));
+    return { out, layout: MS3.LAYOUT, indicator: MS3.INDICATOR };
+  })()`);
+  const want = p => ({ x: p.x / 1000, y: p.y / 650, w: (p.w ?? p.d) / 1000, h: (p.h ?? p.d) / 650 });   // a 1000 x 650 case; positions are centres
+  assert.ok(Math.abs(drawn.out.case - 1000 / 650) < 0.01, `case ${drawn.out.case}`);
+  const wrong = [];
+  for (const [id, place] of Object.entries({ ...drawn.layout, indicator: drawn.indicator })) {
+    for (const [axis, value] of Object.entries(want(place))) {
+      if (Math.abs(drawn.out[id][axis] - value) > 0.004) wrong.push(`${id}.${axis} ${drawn.out[id][axis].toFixed(3)} not ${value.toFixed(3)}`);
+    }
+  }
+  assert.deepEqual(wrong, []);
+});
+
 test("the indicator LED on the drawing follows the colour setting", { skip }, async () => {
   await open("/?demo");
   await ev(`const c = document.querySelector("#sLed"); c.value = "#00ff00"; c.dispatchEvent(new Event("input", { bubbles: true }))`);
   assert.equal(await ev(`getComputedStyle(document.querySelector("#indicator")).backgroundColor`), "rgb(0, 255, 0)");
+});
+
+test("in demo mode sending the LED colour says nothing was sent", { skip }, async () => {
+  await open("/?demo");
+  await ev(`document.querySelector("#ledApply").click()`);
+  assert.equal(await ev(`document.querySelector("#ledStatus").textContent`), "Demo mode: nothing was sent.");
 });
 
 test("without WebHID the page says so up front and disables Connect", { skip }, async () => {
@@ -189,94 +141,6 @@ test("without WebHID the page says so up front and disables Connect", { skip }, 
   assert.equal(await ev(`document.querySelector("#errbox").hidden`), false);
   assert.match(await ev(`document.querySelector("#errbox").textContent`), /WebHID/);
   assert.equal(await ev(`document.querySelector("#connect").disabled`), true);
-});
-
-// ---- the real WebHID path, with a fake navigator.hid injected before the page loads ----
-const FAKE_HID = `(() => {
-  const hid = new EventTarget(), dev = new EventTarget();
-  Object.assign(dev, { vendorId: 0x054c, productId: 0x09cc, productName: "Wireless Controller", opened: false,
-    collections: [{ usagePage: 1, usage: 5 }],
-    async open() { if (window.__failOpen) throw new Error("access denied"); this.opened = true; },
-    async receiveFeatureReport() { throw new Error("not needed on USB"); } });
-  const headset = new EventTarget();   // a Sony device that is not a gamepad
-  Object.assign(headset, { vendorId: 0x054c, productId: 0x0ce6, productName: "Sony Headset", opened: false,
-    collections: [{ usagePage: 0xff00, usage: 1 }], async open() { this.opened = true; }, async receiveFeatureReport() {} });
-  const dualsense = new EventTarget();   // a Sony gamepad with a different report layout
-  Object.assign(dualsense, { vendorId: 0x054c, productId: 0x0ce6, productName: "DualSense Wireless Controller", opened: false,
-    collections: [{ usagePage: 1, usage: 5 }], async open() { this.opened = true; }, async receiveFeatureReport() {} });
-  window.__fake = {
-    dev, filters: null, granted: !window.__notGranted,
-    send(patch = {}) {   // a USB input report: sticks centred, hat neutral, then whatever bytes the test sets
-      const b = new Uint8Array(63); b.fill(128, 0, 4); b[4] = 0x08;
-      for (const [i, v] of Object.entries(patch)) b[i] = v;
-      const ev = new Event("inputreport"); ev.reportId = 1; ev.data = new DataView(b.buffer); dev.dispatchEvent(ev);
-    },
-    fire(type) { const ev = new Event(type); ev.device = dev; hid.dispatchEvent(ev); },
-  };
-  hid.getDevices = async () => (window.__fake.granted ? (window.__withHeadset ? [headset, dev] : window.__withDualSense ? [dualsense, dev] : [dev]) : []);
-  hid.requestDevice = async opts => { window.__fake.filters = opts.filters; window.__fake.granted = true; return [dev]; };
-  Object.defineProperty(Navigator.prototype, "hid", { get: () => hid, configurable: true });
-})();`;
-const attached = `document.querySelector("#statusText").textContent === "Wireless Controller"`;
-const isOn = id => ev(`document.querySelector("#key_${id}").classList.contains("on")`);
-
-test("a controller the browser already trusts is attached on load and its presses light the drawing", { skip }, async () => {
-  await open("/", { beforeLoad: FAKE_HID });
-  await waitFor(attached);
-  await ev(`window.__fake.send({ 4: 0x18 })`);   // square
-  assert.equal(await isOn("square"), true);
-  await ev(`window.__fake.send({})`);
-  assert.equal(await isOn("square"), false);
-  await ev(`for (let i = 0; i < 5; i++) window.__fake.send({})`);
-  await waitFor(`document.querySelector("#transport").textContent === "USB"`);
-});
-
-test("unplugging clears the lit keys and the readings, and plugging back in reconnects", { skip }, async () => {
-  await open("/", { beforeLoad: FAKE_HID });
-  await waitFor(attached);
-  await ev(`window.__t = setInterval(() => window.__fake.send({ 4: 0x18, 5: 0x02 }), 4)`);   // square and R1 held, streaming
-  await waitFor(`document.querySelector("#rate").textContent !== "—"`);                        // a live reading is on screen
-  await ev(`clearInterval(window.__t)`);
-  await ev(`window.__fake.fire("disconnect")`);
-  assert.equal(await ev(`document.querySelector("#statusText").textContent`), "Disconnected");
-  assert.equal(await ev(`document.querySelectorAll(".key.on").length`), 0);
-  assert.equal(await ev(`document.querySelector("#rate").textContent`), "—");
-  await ev(`window.__fake.send({ 4: 0x18 })`);                 // a late report from the old connection must be ignored
-  assert.equal(await ev(`document.querySelectorAll(".key.on").length`), 0);
-  await ev(`window.__fake.fire("connect")`);
-  await waitFor(attached);
-  await ev(`window.__fake.send({ 4: 0x18 })`);
-  assert.equal(await isOn("square"), true);
-});
-
-test("Connect asks the browser for a DualShock 4 class gamepad, nothing broader", { skip }, async () => {
-  await open("/", { beforeLoad: `window.__notGranted = true;` + FAKE_HID });
-  assert.equal(await ev(`document.querySelector("#statusText").textContent`), "Disconnected");
-  await ev(`document.querySelector("#connect").click()`);
-  await waitFor(attached);
-  assert.deepEqual(await ev(`window.__fake.filters`), [
-    { vendorId: 0x054c, productId: 0x09cc, usagePage: 1, usage: 5 },   // DualShock 4 v2, which is what the Maestro S3 reports
-    { vendorId: 0x054c, productId: 0x05c4, usagePage: 1, usage: 5 },   // DualShock 4 v1
-  ]);
-});
-
-test("a device that cannot be opened is explained, not silently ignored", { skip }, async () => {
-  await open("/", { beforeLoad: `window.__failOpen = true;` + FAKE_HID });
-  await waitFor(`!document.querySelector("#errbox").hidden`);
-  assert.match(await ev(`document.querySelector("#errbox").textContent`), /Could not open the controller: access denied/);
-  assert.equal(await ev(`document.querySelector("#statusText").textContent`), "Disconnected");
-});
-
-test("a Sony device that is not a gamepad is never picked as the controller", { skip }, async () => {
-  await open("/", { beforeLoad: `window.__withHeadset = true;` + FAKE_HID });
-  await waitFor(attached);
-  assert.notEqual(await ev(`document.querySelector("#statusText").textContent`), "Sony Headset");
-});
-
-test("a Sony gamepad with a different report layout is never picked as the controller", { skip }, async () => {
-  await open("/", { beforeLoad: `window.__withDualSense = true;` + FAKE_HID });
-  await waitFor(attached);
-  assert.notEqual(await ev(`document.querySelector("#statusText").textContent`), "DualSense Wireless Controller");
 });
 
 // ---- readable text: WCAG 2.x AA needs 4.5:1 for normal-size text (formula written out here, not imported) ----
@@ -294,20 +158,37 @@ const probe = `(sels => sels.map(sel => {
   for (let n = el; n && !bg; n = n.parentElement) { const c = nums(getComputedStyle(n).backgroundColor); if ((c[3] ?? 1) === 1) bg = c.slice(0, 3); }
   return [sel, nums(getComputedStyle(el).color).slice(0, 3), bg];
 }))`;
+const TEXTS = ["#connect", "#openSettings", ".stat .k", "#dirName", ".sub", ".legend", ".note", "#timingVerdict", ".combos kbd", ".combos span",
+  "th", "#ledStatus", ".drawer h3", ".drawer label", "#demobar", "#demobar a", "td.num"];
 
-for (const theme of ["light", "dark"]) {
-  test(`text is readable in the ${theme} theme`, { skip }, async () => {
-    const storage = JSON.stringify({ theme });
-    await open("/?demo", { storage });
-    await waitFor(`document.querySelector("#rateChip").textContent.trim() === "GOOD"`);
-    const found = await ev(`${probe}(["#connect", "#openSettings", ".stat .k", "#rateChip", ".combos kbd", "th"])`);
-    await open("/?demo=slow", { storage });
-    await waitFor(`!document.querySelector("#healthNote").hidden`);
-    found.push(...await ev(`${probe}(["#healthNote"])`));
-    await open("/", { storage });
-    found.push(...await ev(`${probe}(["#intro a"])`));
-    const unreadable = found.filter(([, fg, bg]) => !fg || !bg || contrast(fg, bg) < 4.5)
-      .map(([sel, fg, bg]) => `${sel} ${fg && bg ? contrast(fg, bg).toFixed(2) : "missing"}`);
-    assert.deepEqual(unreadable, []);
+// The page can be dark because the user chose it or because their system is: both sets of colours must be readable.
+const THEMES = [   // [name, theme saved in Settings, what the operating system prefers]
+  ["light", "light", null], ["dark", "dark", null],
+  ["system on a dark OS", "system", "dark"], ["system on a light OS", "system", "light"],
+];
+for (const [name, theme, preferred] of THEMES) {
+  test(`text is readable in the ${name} theme`, { skip }, async () => {
+    await h.cdp.send("Emulation.setEmulatedMedia", { features: preferred ? [{ name: "prefers-color-scheme", value: preferred }] : [] });
+    try {
+      const storage = JSON.stringify({ theme });
+      await open("/?demo", { storage });
+      await waitFor(`document.querySelector("#rateChip").textContent.trim() === "GOOD"`);
+      const found = await ev(`(() => {
+        const P = ${probe}, chip = document.querySelector("#rateChip"), row = document.querySelector("#healthBody tr"), out = P(${JSON.stringify(TEXTS)});
+        for (const grade of ["good", "warn", "crit"]) { chip.className = "chip " + grade; out.push(...P(["#rateChip"]).map(([s, ...rest]) => [s + " " + grade, ...rest])); }
+        for (const state of ["ok", "flag"]) { row.className = state; out.push(...P(["#healthBody tr td.health"]).map(([s, ...rest]) => [s + " " + state, ...rest])); }
+        return out;
+      })()`);
+      await open("/?demo=slow", { storage });
+      await waitFor(`!document.querySelector("#healthNote").hidden`);
+      found.push(...await ev(`${probe}(["#healthNote"])`));
+      await open("/", { storage });
+      found.push(...await ev(`${probe}(["#intro a", "#intro"])`));
+      const unreadable = found.filter(([, fg, bg]) => !fg || !bg || contrast(fg, bg) < 4.5)
+        .map(([sel, fg, bg]) => `${sel} ${fg && bg ? contrast(fg, bg).toFixed(2) : "missing"}`);
+      assert.deepEqual(unreadable, []);
+    } finally {
+      await h.cdp.send("Emulation.setEmulatedMedia", { features: [] });
+    }
   });
 }

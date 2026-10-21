@@ -25,12 +25,12 @@
   </header>
 
   <noscript><div class="banner warn">This dashboard needs JavaScript and a browser with WebHID.</div></noscript>
-  <div id="intro" class="banner">Click <b>Connect controller</b> and pick <b>Wireless Controller</b>. After the first time it reconnects by itself. No controller to hand? <a href="?demo">Try the demo</a>.</div>
+  <div id="intro" class="banner">Click <b>Connect controller</b> and pick <b>Wireless Controller</b>. After the first time it usually reconnects by itself; if it does not, click Connect again. No controller to hand? <a href="?demo">Try the demo</a>.</div>
   <div id="demobar" class="banner" hidden>Demo mode: this is simulated input, not a real controller. <a href="./">Leave the demo</a></div>
   <div id="errbox" class="banner warn" role="alert" hidden></div>
 
   <section class="rail" aria-label="Controller status">
-    <div class="stat"><div class="k">Status</div><div class="v small"><span id="statusDot" class="dot"></span><span id="statusText">Disconnected</span></div></div>
+    <div class="stat"><div class="k">Status</div><div class="v small"><span id="statusDot" class="dot"></span><span id="statusText" role="status">Disconnected</span></div></div>
     <div class="stat"><div class="k">Transport</div><div class="v" id="transport">—</div></div>
     <div class="stat"><div class="k">Report rate</div><div class="v mono"><span id="rate">—</span> <small>Hz</small> <span id="rateChip" class="chip" hidden></span></div></div>
     <div class="stat"><div class="k">Interval / jitter</div><div class="v mono"><span id="interval">—</span><small> ms</small> <small>± <span id="jitter">—</span></small></div></div>
@@ -44,6 +44,7 @@
       The controller cleans opposite directions before the PC sees them, so the SOCD box shows the result.
       Hold <b>Left + Right</b>: neutral in SOCD1, SOCD2 and EZ. Hold <b>Up + Down</b>: Up in SOCD1 and EZ, neutral in SOCD2.
       Newer firmware adds SOCD3, where the last input wins. The page sees only what the controller sends, not what you hold.
+      If you switch the direction buttons to a stick (Option + Down or Right), the box names that stick.
     </div>
   </section>
 
@@ -116,7 +117,7 @@
   <h3>Indicator LED</h3>
   <div class="row"><label for="sLed">Colour</label><input type="color" id="sLed"></div>
   <div class="row"><button id="ledApply">Send to controller</button><button class="ghost" id="ledOff">Turn off</button></div>
-  <div class="status-line" id="ledStatus">USB only. This is the small player light under the touchpad, set the way games set it; nothing is saved on the controller. The button backlights are set on the controller with L3 + R3.</div>
+  <div class="status-line" id="ledStatus" role="status">USB only. This is the small player light under the touchpad, set the way games set it; nothing is saved on the controller. The button backlights are set on the controller with L3 + R3.</div>
 
   <div class="row end"><button class="ghost" id="resetSettings">Reset settings</button></div>
 </aside>
