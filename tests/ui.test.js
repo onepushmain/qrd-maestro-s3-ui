@@ -278,3 +278,36 @@ test("a Sony gamepad with a different report layout is never picked as the contr
   await waitFor(attached);
   assert.notEqual(await ev(`document.querySelector("#statusText").textContent`), "DualSense Wireless Controller");
 });
+
+// ---- readable text: WCAG 2.x AA needs 4.5:1 for normal-size text (formula written out here, not imported) ----
+const luminance = ([r, g, b]) => {
+  const lin = c => { c /= 255; return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4; };
+  return 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b);
+};
+const contrast = (a, b) => { const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x); return (hi + 0.05) / (lo + 0.05); };
+// text colour and the first opaque background behind it, for each selector, read from the rendered page
+const probe = `(sels => sels.map(sel => {
+  const el = document.querySelector(sel);
+  if (!el) return [sel, null, null];
+  const nums = c => c.match(/[\\d.]+/g).map(Number);
+  let bg = null;
+  for (let n = el; n && !bg; n = n.parentElement) { const c = nums(getComputedStyle(n).backgroundColor); if ((c[3] ?? 1) === 1) bg = c.slice(0, 3); }
+  return [sel, nums(getComputedStyle(el).color).slice(0, 3), bg];
+}))`;
+
+for (const theme of ["light", "dark"]) {
+  test(`text is readable in the ${theme} theme`, { skip }, async () => {
+    const storage = JSON.stringify({ theme });
+    await open("/?demo", { storage });
+    await waitFor(`document.querySelector("#rateChip").textContent.trim() === "GOOD"`);
+    const found = await ev(`${probe}(["#connect", "#openSettings", ".stat .k", "#rateChip", ".combos kbd", "th"])`);
+    await open("/?demo=slow", { storage });
+    await waitFor(`!document.querySelector("#healthNote").hidden`);
+    found.push(...await ev(`${probe}(["#healthNote"])`));
+    await open("/", { storage });
+    found.push(...await ev(`${probe}(["#intro a"])`));
+    const unreadable = found.filter(([, fg, bg]) => !fg || !bg || contrast(fg, bg) < 4.5)
+      .map(([sel, fg, bg]) => `${sel} ${fg && bg ? contrast(fg, bg).toFixed(2) : "missing"}`);
+    assert.deepEqual(unreadable, []);
+  });
+}

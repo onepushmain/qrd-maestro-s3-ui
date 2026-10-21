@@ -15,9 +15,10 @@ controller to report; they never change what it stores.
 ```
 git clone https://github.com/onepushmain/qrd-maestro-s3-ui
 cd qrd-maestro-s3-ui
-python3 -m http.server 8777          # on Windows: python -m http.server 8777
+python3 -m http.server 8777 --bind 127.0.0.1     # on Windows: python -m http.server 8777 --bind 127.0.0.1
 ```
 
+`--bind 127.0.0.1` keeps the server to your own computer; without it Python serves this whole folder to your network.
 Open <http://localhost:8777>. There is no controller in the way: <http://localhost:8777/?demo>
 plays a simulated one (`?demo=slow` simulates a slow report stream). To use a real controller,
 click **Connect controller** and pick **Wireless Controller**; after the first time it reconnects by itself.

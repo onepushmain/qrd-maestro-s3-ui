@@ -4,6 +4,8 @@
 (function () {
   const { KEYS, LAYOUT, CASE, INDICATOR, RESET, SONY_VENDOR, DS4_PRODUCTS } = MS3;
   const $ = id => document.getElementById(id);
+  const keyEls = {};                        // key id -> its element, so a report never has to search the page
+  const shown = { dir: "Neutral", battery: "" };   // what the two readouts last showed; text is written only when it changes
   const params = new URLSearchParams(location.search);
   const demo = params.has("demo") ? MS3Demo.create(params.get("demo") === "slow" ? "slow" : "fast") : null;
 
@@ -44,6 +46,7 @@
     for (const [id, k] of Object.entries(KEYS)) {
       const el = document.createElement("div");
       el.id = "key_" + id;
+      keyEls[id] = el;
       el.className = "key" + (k.small ? " small" : "") + (k.pad ? " pad" : "") + (k.static ? " static" : "");
       if (k.static) el.title = "Handled inside the controller; it is not reported to the PC";
       place(el, LAYOUT[id]);
@@ -65,7 +68,7 @@
 
   function applyLabels() {
     for (const [id, k] of Object.entries(KEYS)) {
-      const el = $("key_" + id), text = k.lbl[S.labels];
+      const el = keyEls[id], text = k.lbl[S.labels];
       if (k.small && !k.pad) {   // small keys carry their name beside them, on the side facing away from the touchpad
         let side = el.firstElementChild;
         if (!side) {
@@ -169,12 +172,14 @@
     for (const [id, down] of Object.entries(out.pressed)) {
       const was = stats[id].state;
       MS3.recordChange(stats[id], down, e.timeStamp, S.bounce);
-      if (was !== down) $("key_" + id).classList.toggle("on", down);
+      if (was !== down) keyEls[id].classList.toggle("on", down);
     }
-    $("dirName").textContent = out.dirs.length ? out.dirs.map(cap).join(" + ") : "Neutral";
+    const dir = out.dirs.length ? out.dirs.map(cap).join(" + ") : "Neutral";
+    if (dir !== shown.dir) $("dirName").textContent = shown.dir = dir;
     if (out.battery) {
       const { percent, state } = out.battery;
-      $("battery").textContent = percent + "%" + (state === "charging" ? " ⚡" : state === "full" ? " full" : "");
+      const text = percent + "%" + (state === "charging" ? " ⚡" : state === "full" ? " full" : "");
+      if (text !== shown.battery) $("battery").textContent = shown.battery = text;
     }
     if (S.panels.raw) {
       let hex = "ID " + e.reportId.toString(16).padStart(2, "0") + "  ";
@@ -242,7 +247,8 @@
     $("statusText").textContent = "Disconnected";
     document.querySelectorAll(".key.on").forEach(k => k.classList.remove("on"));
     for (const id of hardwareKeys) stats[id].state = false;
-    $("dirName").textContent = "Neutral";
+    $("dirName").textContent = shown.dir = "Neutral";
+    shown.battery = "";
     $("rateChip").hidden = true;
     for (const id of ["rate", "interval", "jitter", "battery", "transport"]) $(id).textContent = "—";
   }
