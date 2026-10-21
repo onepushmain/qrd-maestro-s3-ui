@@ -1,0 +1,23 @@
+# udev rules for ONE QRD Maestro S3. tools/install-udev.sh fills in @MAC@ with the controller's Bluetooth MAC.
+#
+# The Maestro S3 presents itself as a Sony DualShock 4 (054c:09cc), so its MAC is the only thing that
+# tells it apart from a real DualShock 4. Every rule below matches that MAC, so other controllers are left alone.
+
+# A stable name for the gamepad node: /dev/input/qrd-maestro-s3
+SUBSYSTEM=="input", KERNEL=="event*", ATTRS{uniq}=="@MAC@", ATTRS{name}=="*Wireless Controller", \
+  SYMLINK+="input/qrd-maestro-s3", ENV{ID_MODEL}="QRD_Maestro_S3", ENV{ID_VENDOR}="QRD"
+
+# Hide the motion-sensor and touchpad nodes from desktop input stacks (libinput).
+# Programs that read evdev or hidraw directly still see them.
+SUBSYSTEM=="input", KERNEL=="event*", ATTRS{uniq}=="@MAC@", ATTRS{name}=="*Motion Sensors", ENV{LIBINPUT_IGNORE_DEVICE}="1"
+SUBSYSTEM=="input", KERNEL=="event*", ATTRS{uniq}=="@MAC@", ATTRS{name}=="*Touchpad", ENV{LIBINPUT_IGNORE_DEVICE}="1"
+
+# hidraw is what the browser dashboard reads: readable by the logged-in user, with a stable name.
+# hidraw and LED devices have no `uniq` of their own, so the MAC is read from the parent HID device's uevent file.
+SUBSYSTEM=="hidraw", KERNELS=="000[35]:054C:09CC.*", PROGRAM="/bin/grep -qx HID_UNIQ=@MAC@ /sys%p/../../uevent", \
+  SYMLINK+="qrd-maestro-s3-hidraw", TAG+="uaccess"
+
+# The lightbar LED files become writable by every local user (sysfs has no per-seat access lists).
+# Delete this rule to keep them root-only and use sudo with tools/lightbar.sh instead.
+SUBSYSTEM=="leds", KERNELS=="000[35]:054C:09CC.*", PROGRAM="/bin/grep -qx HID_UNIQ=@MAC@ /sys%p/../../uevent", \
+  RUN+="/bin/chmod 0666 /sys%p/brightness"

@@ -1,32 +1,51 @@
 #!/usr/bin/env python3
-# READ-ONLY: issues HID GET_FEATURE (HIDIOCGFEATURE) for each known DS4/vendor report id.
-# Sends no SET_ reports; cannot change controller state.
-import fcntl, sys, os
+"""Dump every feature report the controller's HID descriptor declares. Read-only (GET_FEATURE only).
 
-DEV = sys.argv[1] if len(sys.argv) > 1 else "/dev/hidraw6"
+Reports that come back byte for byte identical are grouped: this firmware answers many report IDs
+with the same filler buffer, which would otherwise bury the few that carry real data."""
+import argparse
+import os
+import sys
 
-def ioc(d, t, nr, size):  # Linux _IOC
-    return (d << 30) | (size << 16) | (ord(t) << 8) | nr
+import hidraw
 
-def hidiocgfeature(size):
-    return ioc(3, 'H', 0x07, size)  # dir=READ|WRITE
 
-# report ids seen in the Maestro S3 / DS4 descriptor (feature reports)
-IDS = [0x02,0x04,0x05,0x08,0x10,0x11,0x12,0x13,0x14,0x15,0x16,
-       0x80,0x81,0x82,0x83,0x84,0x85,0x86,0x87,0x88,0x89,
-       0x90,0x91,0x92,0x93,0x94,0xa0,0xa3,0xf0,0xf1,0xf2]
+def preview(data, full):
+    shown = data if full else data[:40]
+    return " ".join(f"{b:02x}" for b in shown) + (" ..." if len(shown) < len(data) else "")
 
-fd = os.open(DEV, os.O_RDWR)
-print(f"# feature-report dump of {DEV}  (read-only)\n")
-try:
-    for rid in IDS:
-        buf = bytearray(256); buf[0] = rid
-        try:
-            n = fcntl.ioctl(fd, hidiocgfeature(len(buf)), buf, True)
-        except OSError as e:
-            print(f"id 0x{rid:02x}: --  ({e.strerror})"); continue
-        data = bytes(buf[:n])
-        hexs = ' '.join(f"{b:02x}" for b in data)
-        print(f"id 0x{rid:02x} len={n:3d}: {hexs}")
-finally:
-    os.close(fd)
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    parser.add_argument("device", nargs="?", help="hidraw node (default: find the controller)")
+    parser.add_argument("--full", action="store_true", help="print every byte instead of the first 40")
+    args = parser.parse_args(argv)
+    try:
+        dev = args.device or hidraw.find_device()
+        fd = hidraw.open_device(dev)
+        ids = hidraw.feature_report_ids(hidraw.read_descriptor(dev))
+    except (hidraw.DeviceNotFound, OSError) as err:
+        sys.exit(f"dump_features: {err}")
+
+    groups, rejected = {}, []
+    try:
+        for report_id in ids:
+            try:
+                groups.setdefault(hidraw.get_feature(fd, report_id), []).append(report_id)
+            except OSError as err:
+                rejected.append((report_id, err.strerror))
+    finally:
+        os.close(fd)
+
+    print(f"# {dev}: {len(ids)} feature reports declared, {len(groups)} distinct replies (read-only)")
+    for data, members in sorted(groups.items(), key=lambda kv: kv[1][0]):
+        names = " ".join(f"0x{i:02x}" for i in members)
+        label = "id" if len(members) == 1 else "ids"
+        print(f"\n{label} {names}  ({len(data)} bytes{'' if len(members) == 1 else ' each, identical'})")
+        print(f"  {preview(data, args.full)}")
+    for report_id, why in rejected:
+        print(f"\nid 0x{report_id:02x}: rejected ({why})")
+
+
+if __name__ == "__main__":
+    main()

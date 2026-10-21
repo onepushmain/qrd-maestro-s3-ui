@@ -1,0 +1,3 @@
+# Optional. Lets the logged-in user create virtual input devices, which tools/debounce.py needs.
+# Any program you run can then inject keyboard, mouse and gamepad input, so install this only if you use the filter.
+KERNEL=="uinput", SUBSYSTEM=="misc", TAG+="uaccess", OPTIONS+="static_node=uinput"
