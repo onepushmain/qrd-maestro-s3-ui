@@ -17,17 +17,19 @@ uinput_name=71-qrd-maestro-s3-uinput.rules
 usage() { awk 'NR > 1 && /^#/ { sub(/^# ?/, ""); print; next } NR > 1 { exit }' "$0"; }
 die() { echo "install-udev: $1" >&2; exit "${2:-1}"; }
 
-mac="" uinput=0 action=install
+mac="" uinput=0 action=""
+choose() { [[ -z $action ]] || die "choose --print or --remove, not both" 2; action=$1; }
 while [[ $# -gt 0 ]]; do
   case $1 in
     --mac) [[ -n ${2:-} ]] || die "--mac needs a value" 2; mac=$2; shift 2 ;;
     --uinput) uinput=1; shift ;;
-    --print) action=print; shift ;;
-    --remove) action=remove; shift ;;
+    --print) choose print; shift ;;
+    --remove) choose remove; shift ;;
     -h|--help) usage; exit 0 ;;
     *) die "unknown option: $1 (see --help)" 2 ;;
   esac
 done
+action=${action:-install}
 
 sudo_cmd=()
 [[ $EUID -eq 0 ]] || sudo_cmd=(sudo)

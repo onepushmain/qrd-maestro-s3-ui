@@ -228,6 +228,18 @@ class InstallUdev(unittest.TestCase):
             run("install-udev.sh", "--mac", self.MAC, "--uinput", "--print", path_prefix=bin_dir)
             self.assertFalse(marker.exists())
 
+    def test_asking_to_print_and_remove_together_is_refused_before_anything_runs(self):
+        with tempfile.TemporaryDirectory() as bin_dir:
+            marker = pathlib.Path(bin_dir, "sudo-was-called")
+            sudo = pathlib.Path(bin_dir, "sudo")
+            sudo.write_text(f"#!/bin/sh\ntouch {marker}\nexit 1\n")
+            sudo.chmod(0o755)
+            for order in (("--print", "--remove"), ("--remove", "--print")):
+                r = run("install-udev.sh", *order, "--mac", self.MAC, path_prefix=bin_dir)
+                self.assertEqual(r.returncode, 2, order)
+                self.assertIn("not both", r.stderr)
+            self.assertFalse(marker.exists())
+
     @unittest.skipUnless(
         shutil.which("udevadm") and subprocess.run(["udevadm", "verify", "--help"], capture_output=True).returncode == 0,
         "this udevadm has no `verify` command")
