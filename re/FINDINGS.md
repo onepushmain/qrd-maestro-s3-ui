@@ -20,7 +20,7 @@ USB report `0x01`, with the report id already removed (this is what WebHID and `
 
 | Byte | Content |
 |------|---------|
-| 0 to 3 | Sticks. There are none, but the direction buttons can be switched to act as the left or right stick (Option + Down or Right) and then arrive here |
+| 0 to 3 | Sticks. There are none, but the direction buttons can be switched to act as the left or right stick (Option + Down or Right) and then arrive here (from the manual and the DualShock 4 layout; we did not switch ours, because that setting is saved on the controller) |
 | 4 | Low nibble: d-pad hat, 0 up, 1 up-right, 2 right, 3 right-down, 4 down, 5 down-left, 6 left, 7 left-up, 8 neutral. High nibble: square `0x10`, cross `0x20`, circle `0x40`, triangle `0x80` |
 | 5 | L1 `0x01`, R1 `0x02`, L2 `0x04`, R2 `0x08`, Share `0x10`, Options `0x20`, L3 `0x40`, R3 `0x80` |
 | 6 | Home `0x01`, touchpad click `0x02`, the top six bits are a frame counter |

@@ -23,12 +23,14 @@ python3 -m http.server 8777 --bind 127.0.0.1     # on Windows: python -m http.se
 `--bind 127.0.0.1` keeps the server to your own computer; without it Python serves this whole folder to your network.
 Open <http://localhost:8777>. There is no controller in the way: <http://localhost:8777/?demo>
 plays a simulated one (`?demo=slow` simulates a slow report stream). To use a real controller,
-click **Connect controller** and pick **Wireless Controller**; after the first time it reconnects by itself.
+click **Connect controller** and pick **Wireless Controller**. After the first time the browser usually lets the page
+reconnect by itself when you plug the controller in; if it does not, click Connect again.
 
 What it shows:
 
 - the controller drawn from the diagram in QRD's manual, each button lighting as you press it
-- **SOCD output**: what the controller sends after its own SOCD cleaning, so you can check which mode you are in
+- **SOCD output**: the direction the controller sends after its own SOCD cleaning. Hold Up + Down to tell SOCD2 from SOCD1 and EZ,
+  which look the same from the PC. If you switch the direction buttons to a stick, it names the stick
 - **report rate and jitter**, graded GOOD, OK or SLOW, with advice when it is slow
 - **switch health**: per-button press counts and double-fires (bounces), to spot a worn hot-swap switch
 - **battery**, **transport** (USB or Bluetooth), and the **controller shortcuts** from the manual in one place
@@ -46,6 +48,11 @@ What it shows:
   is tested with synthetic reports only; it has not been tried on a real controller.
 - On Linux, if the browser cannot open the device, install the udev rules below.
 - The dashboard sees what the controller sends, not what you hold. Where the controller cancels two directions, the page cannot know you pressed them.
+- When you switch the direction buttons to a stick (Option + Down or Right), the page reads them from the stick axes the way a
+  DualShock 4 sends a stick. That mode is saved on the controller, so we did not switch ours: this has been tested with synthetic reports only.
+- Timing is taken in the browser when each report is delivered. If the page is busy, queued reports arrive together, so changes
+  less than a millisecond apart are ignored (a controller cannot send faster than that); one stray bounce on a switch that
+  otherwise looks healthy is worth repeating before you believe it.
 
 ## Findings
 
