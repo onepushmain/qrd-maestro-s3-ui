@@ -2,7 +2,7 @@
 /* Dashboard wiring: reads the controller over WebHID (or the built-in demo), draws it, and keeps the panels current.
    Decoding, validation and counting live in core.js, which has tests. */
 (function () {
-  const { KEYS, LAYOUT, CASE, INDICATOR, RESET, SONY_VENDOR } = MS3;
+  const { KEYS, LAYOUT, CASE, INDICATOR, RESET, SONY_VENDOR, DS4_PRODUCTS } = MS3;
   const $ = id => document.getElementById(id);
   const params = new URLSearchParams(location.search);
   const demo = params.has("demo") ? MS3Demo.create(params.get("demo") === "slow" ? "slow" : "fast") : null;
@@ -215,7 +215,8 @@
   setInterval(refresh, 300);
 
   // ---------- connecting ----------
-  const isGamepad = d => d.vendorId === SONY_VENDOR && d.collections.some(c => c.usagePage === 1 && c.usage === 5);
+  // Only controllers whose reports this page can decode: a DualSense, say, would show nonsense.
+  const isGamepad = d => d.vendorId === SONY_VENDOR && DS4_PRODUCTS.includes(d.productId) && d.collections.some(c => c.usagePage === 1 && c.usage === 5);
   function showError(message) { const box = $("errbox"); box.textContent = message; box.hidden = false; }
 
   async function attach(d) {
@@ -253,7 +254,7 @@
   $("connect").addEventListener("click", async () => {
     try {
       if (demo) { await attach(demo); return; }
-      const [d] = await navigator.hid.requestDevice({ filters: [{ vendorId: SONY_VENDOR, usagePage: 1, usage: 5 }] });
+      const [d] = await navigator.hid.requestDevice({ filters: DS4_PRODUCTS.map(productId => ({ vendorId: SONY_VENDOR, productId, usagePage: 1, usage: 5 })) });
       if (d) await attach(d);
     } catch (err) { report(err); }
   });

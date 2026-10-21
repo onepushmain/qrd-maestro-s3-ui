@@ -201,6 +201,9 @@ const FAKE_HID = `(() => {
   const headset = new EventTarget();   // a Sony device that is not a gamepad
   Object.assign(headset, { vendorId: 0x054c, productId: 0x0ce6, productName: "Sony Headset", opened: false,
     collections: [{ usagePage: 0xff00, usage: 1 }], async open() { this.opened = true; }, async receiveFeatureReport() {} });
+  const dualsense = new EventTarget();   // a Sony gamepad with a different report layout
+  Object.assign(dualsense, { vendorId: 0x054c, productId: 0x0ce6, productName: "DualSense Wireless Controller", opened: false,
+    collections: [{ usagePage: 1, usage: 5 }], async open() { this.opened = true; }, async receiveFeatureReport() {} });
   window.__fake = {
     dev, filters: null, granted: !window.__notGranted,
     send(patch = {}) {   // a USB input report: sticks centred, hat neutral, then whatever bytes the test sets
@@ -210,7 +213,7 @@ const FAKE_HID = `(() => {
     },
     fire(type) { const ev = new Event(type); ev.device = dev; hid.dispatchEvent(ev); },
   };
-  hid.getDevices = async () => (window.__fake.granted ? (window.__withHeadset ? [headset, dev] : [dev]) : []);
+  hid.getDevices = async () => (window.__fake.granted ? (window.__withHeadset ? [headset, dev] : window.__withDualSense ? [dualsense, dev] : [dev]) : []);
   hid.requestDevice = async opts => { window.__fake.filters = opts.filters; window.__fake.granted = true; return [dev]; };
   Object.defineProperty(Navigator.prototype, "hid", { get: () => hid, configurable: true });
 })();`;
@@ -246,12 +249,15 @@ test("unplugging clears the lit keys and the readings, and plugging back in reco
   assert.equal(await isOn("square"), true);
 });
 
-test("Connect asks the browser for a Sony gamepad, nothing broader", { skip }, async () => {
+test("Connect asks the browser for a DualShock 4 class gamepad, nothing broader", { skip }, async () => {
   await open("/", { beforeLoad: `window.__notGranted = true;` + FAKE_HID });
   assert.equal(await ev(`document.querySelector("#statusText").textContent`), "Disconnected");
   await ev(`document.querySelector("#connect").click()`);
   await waitFor(attached);
-  assert.deepEqual(await ev(`window.__fake.filters`), [{ vendorId: 0x054c, usagePage: 1, usage: 5 }]);
+  assert.deepEqual(await ev(`window.__fake.filters`), [
+    { vendorId: 0x054c, productId: 0x09cc, usagePage: 1, usage: 5 },   // DualShock 4 v2, which is what the Maestro S3 reports
+    { vendorId: 0x054c, productId: 0x05c4, usagePage: 1, usage: 5 },   // DualShock 4 v1
+  ]);
 });
 
 test("a device that cannot be opened is explained, not silently ignored", { skip }, async () => {
@@ -265,4 +271,10 @@ test("a Sony device that is not a gamepad is never picked as the controller", { 
   await open("/", { beforeLoad: `window.__withHeadset = true;` + FAKE_HID });
   await waitFor(attached);
   assert.notEqual(await ev(`document.querySelector("#statusText").textContent`), "Sony Headset");
+});
+
+test("a Sony gamepad with a different report layout is never picked as the controller", { skip }, async () => {
+  await open("/", { beforeLoad: `window.__withDualSense = true;` + FAKE_HID });
+  await waitFor(attached);
+  assert.notEqual(await ev(`document.querySelector("#statusText").textContent`), "DualSense Wireless Controller");
 });

@@ -37,7 +37,8 @@ What it shows:
 - Only Linux has been tested. WebHID works the same way on Windows and macOS, so it should too.
   On Windows, close other programs that hold the controller (Steam, a game), or the browser cannot open it.
 - The controller must be in its default **D-input** mode, where it appears as a DualShock 4 (USB id `054C:09CC`).
-  In **X-Input** mode (Option + Share for 3 s) it is not visible to the page.
+  In **X-Input** mode (Option + Share for 3 s) it is not visible to the page. Only DualShock 4 class controllers are offered;
+  other gamepads, such as a PS5 DualSense, use a different report layout and are not supported.
 - Over Bluetooth the dashboard reads the buttons but cannot set the LED.
 - On Linux, if the browser cannot open the device, install the udev rules below.
 - The dashboard sees what the controller sends, not what you hold. Where the controller cancels two directions, the page cannot know you pressed them.

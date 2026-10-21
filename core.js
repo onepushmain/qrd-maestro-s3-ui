@@ -7,6 +7,7 @@
   else root.MS3 = factory();
 })(typeof self !== "undefined" ? self : this, function () {
   const SONY_VENDOR = 0x054c;
+  const DS4_PRODUCTS = [0x09cc, 0x05c4];   // DualShock 4 v2 (what the Maestro S3 reports) and v1: the same report layout
 
   const same = s => ({ ps: s, arcade: s, xbox: s, hitbox: s });
   const lbl = (ps, arcade, xbox, hitbox) => ({ ps, arcade, xbox, hitbox });
@@ -179,7 +180,7 @@
   }
 
   return {
-    SONY_VENDOR, KEYS, CASE, LAYOUT, INDICATOR, RESET, DEFAULT_SETTINGS,
+    SONY_VENDOR, DS4_PRODUCTS, KEYS, CASE, LAYOUT, INDICATOR, RESET, DEFAULT_SETTINGS,
     decodeReport, decodeBattery, newStat, recordChange, canResolveBounce, rateGrade,
     createRateMeter, sanitizeSettings, createBinding,
   };
