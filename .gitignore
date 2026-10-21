@@ -1,11 +1,8 @@
-# Dumps and snapshots from a specific controller (contain its MAC and auth data)
-re/baseline.json
+# Raw feature-report dumps from a real controller hold its Bluetooth MAC and pairing data
+snapshots/
 re/*.json
-*.json
-!dist/*.json
 
-# Runtime / local
+# Local
 server.log
 __pycache__/
 *.pyc
-_preview.html

@@ -1,28 +1,63 @@
 #!/usr/bin/env bash
-# Set the Maestro S3 lightbar through the kernel's hid-playstation LED interface.
-# Runtime-only and reversible — nothing is written to controller flash.
-# Usage: tools/lightbar.sh R G B        e.g. tools/lightbar.sh 0 0 255
-#        tools/lightbar.sh off
-#        tools/lightbar.sh battery      (green > 60%, amber > 25%, red otherwise)
-# Without the build-2 udev rule, run with sudo.
+# Set the controller's lightbar through the kernel's LED interface (hid-playstation).
+# Runtime only: nothing is written to the controller's saved settings.
+# Usage: tools/lightbar.sh [--mac AA:BB:CC:DD:EE:FF] R G B     each 0-255, for example: tools/lightbar.sh 0 0 255
+#        tools/lightbar.sh [--mac ...] off
+#        tools/lightbar.sh [--mac ...] battery   green above 60%, amber above 25%, red below
+# Without --mac it acts on the first DualShock 4 v2 it finds. re/identify.py prints a controller's MAC.
+# The LED files are root-only by default: run with sudo, or install the udev rules
+# (tools/install-udev.sh) so your own user can write them. SYSFS overrides /sys (used by the tests).
 set -euo pipefail
+sysfs=${SYSFS:-/sys}
 
-led=""
-for l in /sys/class/leds/input*:red; do
-  grep -qE "^HID_ID=000[35]:0000054C:000009CC$" "$l/device/uevent" 2>/dev/null && { led=${l%:red}; break; }
-done
-[[ -n "$led" ]] || { echo "Maestro S3 lightbar not found"; exit 1; }
+usage() { awk 'NR > 1 && /^#/ { sub(/^# ?/, ""); print; next } NR > 1 { exit }' "$0"; }
+die() { echo "lightbar: $1" >&2; exit "${2:-1}"; }
+channel_ok() { [[ $1 =~ ^0*([0-9]{1,3})$ ]] && (( 10#${BASH_REMATCH[1]} <= 255 )); }   # at most three digits once leading zeros are gone
 
-set_rgb() { echo "$1" > "$led:red/brightness"; echo "$2" > "$led:green/brightness"; echo "$3" > "$led:blue/brightness"; }
+mac=""
+if [[ ${1:-} == --mac ]]; then
+  [[ -n ${2:-} ]] || die "--mac needs a value" 2
+  mac=${2,,}
+  shift 2
+fi
 
 case "${1:-}" in
+  ''|-h|--help) usage; exit 0 ;;
+  off|battery) mode=$1 ;;
+  *)
+    if [[ $# -eq 3 ]] && channel_ok "$1" && channel_ok "$2" && channel_ok "$3"; then
+      mode=rgb
+    else
+      die "R, G and B must be whole numbers in the range 0-255 (got: $*)" 2
+    fi ;;
+esac
+
+led="" uniq=""
+for l in "$sysfs"/class/leds/input*:red; do
+  [[ -e $l ]] || continue
+  grep -qE '^HID_ID=000[35]:0000054C:000009CC$' "$l/device/uevent" 2>/dev/null || continue
+  candidate=$(sed -n 's/^HID_UNIQ=//p' "$l/device/uevent")   # also names its battery: ps-controller-battery-<MAC>
+  if [[ -n $mac && ${candidate,,} != "$mac" ]]; then continue; fi
+  led=${l%:red}
+  uniq=$candidate
+  break
+done
+[[ -n $led ]] || die "Maestro S3 lightbar not found (is the controller connected?)"
+
+set_rgb() {
+  { echo "$1" > "$led:red/brightness" && echo "$2" > "$led:green/brightness" && echo "$3" > "$led:blue/brightness"; } 2>/dev/null \
+    || die "cannot write the LED files; run with sudo, or install the udev rules (tools/install-udev.sh)"
+}
+
+case $mode in
   off) set_rgb 0 0 0 ;;
+  rgb) set_rgb "$((10#$1))" "$((10#$2))" "$((10#$3))" ;;
   battery)
-    cap=$(cat /sys/class/power_supply/ps-controller-battery-*/capacity | head -1)
+    cap="" f="$sysfs/class/power_supply/ps-controller-battery-${uniq,,}/capacity"
+    if [[ -n $uniq && -r $f ]]; then cap=$(<"$f"); fi
+    [[ $cap =~ ^[0-9]+$ ]] || die "no battery information for this controller"
     if   (( cap > 60 )); then set_rgb 0 255 0
     elif (( cap > 25 )); then set_rgb 255 140 0
     else set_rgb 255 0 0; fi
     echo "battery ${cap}%" ;;
-  ''|-h|--help) sed -n '2,8p' "$0" ;;
-  *) set_rgb "$1" "$2" "$3" ;;
 esac

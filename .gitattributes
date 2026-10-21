@@ -1,1 +1,2 @@
+# Images are binary; the extra attribute exempts them from the author's token-limit commit hook
 *.png binary -token-limit
