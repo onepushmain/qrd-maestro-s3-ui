@@ -9,7 +9,7 @@
 set -euo pipefail
 sysfs=${SYSFS:-/sys}
 
-usage() { sed -n '2,9p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { awk 'NR > 1 && /^#/ { sub(/^# ?/, ""); print; next } NR > 1 { exit }' "$0"; }
 die() { echo "lightbar: $1" >&2; exit "${2:-1}"; }
 channel_ok() { [[ $1 =~ ^[0-9]+$ ]] && (( 10#$1 <= 255 )); }
 

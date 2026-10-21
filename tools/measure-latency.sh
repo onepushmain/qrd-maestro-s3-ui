@@ -7,7 +7,7 @@
 set -euo pipefail
 sysfs=${SYSFS:-/sys}
 
-usage() { sed -n '2,7p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { awk 'NR > 1 && /^#/ { sub(/^# ?/, ""); print; next } NR > 1 { exit }' "$0"; }
 die() { echo "measure-latency: $1" >&2; exit "${2:-1}"; }
 
 # stdin: usbmon text lines. $1: address prefix to keep, for example Ii:5:002:

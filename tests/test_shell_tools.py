@@ -46,6 +46,16 @@ def brightness(root, name):
             for c in ("red", "green", "blue")]
 
 
+class Usage(unittest.TestCase):
+    def test_help_prints_the_usage_comment_and_none_of_the_code(self):
+        for script in ("lightbar.sh", "measure-latency.sh", "install-udev.sh"):
+            r = run(script, "--help")
+            self.assertEqual(r.returncode, 0, script)
+            self.assertIn("Usage:", r.stdout, script)
+            for leak in ("set -", "sysfs=", "#"):
+                self.assertNotIn(leak, r.stdout, f"{script} --help prints source text: {leak!r}")
+
+
 class Lightbar(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()

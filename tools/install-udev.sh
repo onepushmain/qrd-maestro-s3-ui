@@ -14,7 +14,7 @@ rules_dir=/etc/udev/rules.d
 main_name=70-qrd-maestro-s3.rules
 uinput_name=71-qrd-maestro-s3-uinput.rules
 
-usage() { sed -n '2,9p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { awk 'NR > 1 && /^#/ { sub(/^# ?/, ""); print; next } NR > 1 { exit }' "$0"; }
 die() { echo "install-udev: $1" >&2; exit "${2:-1}"; }
 
 mac="" uinput=0 action=install
