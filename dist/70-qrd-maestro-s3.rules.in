@@ -12,10 +12,14 @@ SUBSYSTEM=="input", KERNEL=="event*", ATTRS{uniq}=="@MAC@", ATTRS{name}=="*Wirel
 SUBSYSTEM=="input", KERNEL=="event*", ATTRS{uniq}=="@MAC@", ATTRS{name}=="*Motion Sensors", ENV{LIBINPUT_IGNORE_DEVICE}="1"
 SUBSYSTEM=="input", KERNEL=="event*", ATTRS{uniq}=="@MAC@", ATTRS{name}=="*Touchpad", ENV{LIBINPUT_IGNORE_DEVICE}="1"
 
-# hidraw is what the browser dashboard reads: readable by the logged-in user, with a stable name.
-# hidraw and LED devices have no `uniq` of their own, so the MAC is read from the parent HID device's uevent file.
+# hidraw is what the browser dashboard reads. Access for the logged-in user applies to every DualShock 4 v2: the
+# driver only learns a controller's MAC after its hidraw node exists, so on a fresh plug the node cannot be told apart in time.
+SUBSYSTEM=="hidraw", KERNELS=="000[35]:054C:09CC.*", TAG+="uaccess"
+
+# The stable name /dev/qrd-maestro-s3-hidraw is keyed to your controller's MAC, read from the parent HID device's uevent file.
+# For the same reason it can be missed on a fresh plug; `sudo udevadm trigger --subsystem-match=hidraw` applies it.
 SUBSYSTEM=="hidraw", KERNELS=="000[35]:054C:09CC.*", PROGRAM="/bin/grep -qx HID_UNIQ=@MAC@ /sys%p/../../uevent", \
-  SYMLINK+="qrd-maestro-s3-hidraw", TAG+="uaccess"
+  SYMLINK+="qrd-maestro-s3-hidraw"
 
 # The lightbar LED files become writable by every local user (sysfs has no per-seat access lists).
 # Delete this rule to keep them root-only and use sudo with tools/lightbar.sh instead.

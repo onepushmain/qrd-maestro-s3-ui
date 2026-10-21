@@ -73,8 +73,11 @@ Details, with how each was measured, are in [`re/FINDINGS.md`](re/FINDINGS.md).
 | `re/dump_features.py` | Lists every HID feature report the controller declares and what it answers | none |
 | `re/snapshot.py` | Save every feature report, change one setting on the controller, save again, diff | none |
 
-The controller looks like a real DualShock 4 to the system, so the udev rules are keyed to **your controller's
-Bluetooth MAC** and leave other controllers alone. `tools/install-udev.sh` finds it when one controller is connected;
+The controller looks like a real DualShock 4 to the system, so the udev rules for the input names, the LED files and the
+`/dev/qrd-maestro-s3-hidraw` name are keyed to **your controller's Bluetooth MAC** and leave other controllers alone. The one
+exception is read access to `/dev/hidraw*`, which the browser needs and which applies to every DualShock 4 v2: the driver
+learns the MAC only after that node exists. (On a fresh plug the hidraw name can be missed for the same reason;
+`sudo udevadm trigger --subsystem-match=hidraw` applies it.) `tools/install-udev.sh` finds it when one controller is connected;
 otherwise pass it with `--mac AA:BB:CC:DD:EE:FF` (`python3 re/identify.py` prints it). The rules make the LED files
 writable by every local user; delete that rule if you share the machine.
 
