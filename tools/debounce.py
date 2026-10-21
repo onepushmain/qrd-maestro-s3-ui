@@ -2,9 +2,11 @@
 """Software chatter filter for a Maestro S3 on Linux. The controller's firmware is not touched.
 
 It grabs the controller's evdev node and re-publishes it as a virtual pad called
-"QRD Maestro S3 (debounced)". Button presses and d-pad directions that flip again within the
-hold-back window (default 8 ms) are treated as switch bounce and swallowed; a real fast tap still
-gets through, a few milliseconds late. Press Ctrl-C to stop and hand the controller back.
+"QRD Maestro S3 (debounced)". Buttons, the d-pad and the L2/R2 axes (3K and 4K) that flip again within
+the hold-back window (default 8 ms) are treated as switch bounce and swallowed; a real fast tap still
+gets through, a few milliseconds late. Stick axes pass through untouched, so directions are not filtered
+if you have switched the direction buttons to left or right stick mode. Press Ctrl-C to stop and hand
+the controller back.
 
 Only programs that read evdev see the filtered pad. Programs that use SDL's HIDAPI driver (Steam and
 most recent games) read /dev/hidraw directly and bypass it; start those with SDL_JOYSTICK_HIDAPI=0.
@@ -16,9 +18,7 @@ import signal
 import sys
 import time
 
-from debounce_core import Debouncer
-
-NAME = "Sony Interactive Entertainment Wireless Controller"   # the pad node; sensors and touchpad have longer names
+from debounce_core import Filter, is_maestro
 
 
 def build_parser():
@@ -34,7 +34,7 @@ def open_source(evdev, path):
     found = None
     for candidate in evdev.list_devices():
         dev = evdev.InputDevice(candidate)
-        if found is None and dev.name == NAME:
+        if found is None and is_maestro(dev.name, dev.info.vendor, dev.info.product):
             found = dev
         else:
             dev.close()
@@ -68,40 +68,27 @@ def main(argv=None):
         ui.close()
         sys.exit("debounce: the controller is already grabbed by another program (is debounce running twice?)")
 
-    hat_axes = {e.ABS_HAT0X, e.ABS_HAT0Y}
-    debouncer = Debouncer(args.window / 1000.0)
-    seen = forwarded = 0
+    flt = Filter(args.window / 1000.0)
     signal.signal(signal.SIGTERM, signal.default_int_handler)
     print(f"Filtering {src.path} -> {ui.device.path} (window {args.window:g} ms). Ctrl-C to stop.")
+
+    def apply(actions):
+        for action in actions:
+            if action[0] == "syn":
+                ui.syn()
+            else:
+                ui.write(*action[1:])
+
     try:
-        dirty = False
         while True:
-            deadline = debouncer.next_deadline()
+            deadline = flt.next_deadline()
             timeout = None if deadline is None else max(0.0, deadline - time.monotonic())
             ready, _, _ = select.select([src.fd], [], [], timeout)
             now = time.monotonic()
             if ready:
                 for ev in src.read():
-                    if ev.type == e.EV_SYN:
-                        if dirty:
-                            ui.syn()
-                            dirty = False
-                    elif (ev.type == e.EV_KEY and ev.value in (0, 1)) or (ev.type == e.EV_ABS and ev.code in hat_axes):
-                        seen += 1
-                        for (etype, code), value in debouncer.change((ev.type, ev.code), ev.value, now):
-                            ui.write(etype, code, value)
-                            forwarded += 1
-                            dirty = True
-                    else:
-                        ui.write_event(ev)
-                        dirty = True
-            for (etype, code), value in debouncer.due(now):
-                ui.write(etype, code, value)
-                forwarded += 1
-                dirty = True
-            if dirty and not ready:
-                ui.syn()
-                dirty = False
+                    apply(flt.feed(ev.type, ev.code, ev.value, now))
+            apply(flt.due(now))
     except KeyboardInterrupt:
         pass
     except OSError as err:
@@ -112,7 +99,7 @@ def main(argv=None):
         except OSError:
             pass
         ui.close()
-        print(f"\nstopped: {seen} button and direction changes seen, {seen - forwarded} swallowed as bounce")
+        print(f"\nstopped: {flt.seen} switch changes seen, {flt.seen - flt.forwarded} swallowed as bounce")
 
 
 if __name__ == "__main__":

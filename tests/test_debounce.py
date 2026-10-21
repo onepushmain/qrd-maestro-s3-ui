@@ -109,6 +109,76 @@ class Debounce(unittest.TestCase):
             self.assertEqual(len(forwarded), len(out))
 
 
+import debounce_core as core
+
+EV_SYN, EV_KEY, EV_ABS = 0, 1, 3     # linux/input-event-codes.h
+BTN_SOUTH, ABS_X, ABS_Z, ABS_RZ, ABS_HAT0X, ABS_HAT0Y = 0x130, 0x00, 0x02, 0x05, 0x10, 0x11
+
+
+class FilterRouting(unittest.TestCase):
+    """What gets written to the virtual pad, packet by packet."""
+
+    def test_a_tap_shorter_than_the_window_is_released_in_a_packet_of_its_own(self):
+        f = core.Filter(W)
+        self.assertEqual(f.feed(EV_KEY, BTN_SOUTH, 1, 0.0) + f.feed(EV_SYN, 0, 0, 0.0),
+                         [("event", EV_KEY, BTN_SOUTH, 1), ("syn",)])
+        self.assertEqual(f.feed(EV_KEY, BTN_SOUTH, 0, 0.003) + f.feed(EV_SYN, 0, 0, 0.003), [])
+        self.assertEqual(f.due(0.009), [("event", EV_KEY, BTN_SOUTH, 0), ("syn",)])
+
+    def test_a_release_that_comes_due_while_other_events_arrive_still_gets_its_syn(self):
+        f = core.Filter(W)
+        f.feed(EV_KEY, BTN_SOUTH, 1, 0.0)
+        f.feed(EV_SYN, 0, 0, 0.0)
+        f.feed(EV_KEY, BTN_SOUTH, 0, 0.003)                       # held back
+        busy = f.feed(EV_ABS, ABS_X, 130, 0.0085)                 # another axis moves; its SYN has not arrived yet
+        out = busy + f.due(0.0085)
+        self.assertIn(("event", EV_KEY, BTN_SOUTH, 0), out)
+        self.assertEqual(out[-1], ("syn",))
+
+    def test_other_events_pass_through_and_each_packet_ends_with_one_syn(self):
+        f = core.Filter(W)
+        self.assertEqual(f.feed(EV_ABS, ABS_X, 130, 0.0), [("event", EV_ABS, ABS_X, 130)])
+        self.assertEqual(f.feed(EV_ABS, ABS_X, 131, 0.001), [("event", EV_ABS, ABS_X, 131)])   # a stick is never held back
+        self.assertEqual(f.feed(EV_SYN, 0, 0, 0.001), [("syn",)])
+        self.assertEqual(f.feed(EV_SYN, 0, 0, 0.1), [])           # nothing written since: no empty packet
+
+    def test_hat_and_trigger_axes_are_debounced_like_buttons(self):
+        for code in (ABS_Z, ABS_RZ, ABS_HAT0X, ABS_HAT0Y):
+            f = core.Filter(W)
+            f.feed(EV_ABS, code, 255, 0.0)
+            f.feed(EV_SYN, 0, 0, 0.0)
+            self.assertEqual(f.feed(EV_ABS, code, 0, 0.002), [], code)      # chatter is held back
+            self.assertEqual(f.feed(EV_ABS, code, 255, 0.004), [], code)    # back to the forwarded value: dropped
+            self.assertEqual(f.due(1.0), [], code)
+
+    def test_key_repeat_is_not_a_switch_change(self):
+        self.assertEqual(core.Filter(W).feed(EV_KEY, BTN_SOUTH, 2, 0.0), [("event", EV_KEY, BTN_SOUTH, 2)])
+
+    def test_it_counts_the_changes_it_swallowed(self):
+        f = core.Filter(W)
+        for t, v in ((0.000, 1), (0.002, 0), (0.004, 1), (0.100, 0)):
+            f.feed(EV_KEY, BTN_SOUTH, v, t)
+            f.due(t)
+        f.due(1.0)
+        self.assertEqual((f.seen, f.forwarded), (4, 2))
+
+
+class WhichDeviceIsTheController(unittest.TestCase):
+    def test_the_usb_and_the_bluetooth_node_names_both_match(self):
+        for name in ("Sony Interactive Entertainment Wireless Controller", "Wireless Controller"):
+            self.assertTrue(core.is_maestro(name, 0x054C, 0x09CC), name)
+
+    def test_the_motion_sensor_and_touchpad_nodes_do_not(self):
+        for name in ("Sony Interactive Entertainment Wireless Controller Motion Sensors",
+                     "Sony Interactive Entertainment Wireless Controller Touchpad", "Wireless Controller Touchpad"):
+            self.assertFalse(core.is_maestro(name, 0x054C, 0x09CC), name)
+
+    def test_other_pads_and_other_makers_do_not(self):
+        self.assertFalse(core.is_maestro("Wireless Controller", 0x054C, 0x05C4))   # DualShock 4 v1
+        self.assertFalse(core.is_maestro("DualSense Wireless Controller", 0x054C, 0x0CE6))
+        self.assertFalse(core.is_maestro("Wireless Controller", 0x046D, 0x09CC))
+
+
 class CommandLine(unittest.TestCase):
     def test_help_works_without_python_evdev_loaded(self):
         r = subprocess.run([sys.executable, str(ROOT / "tools" / "debounce.py"), "--help"],
