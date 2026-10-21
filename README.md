@@ -103,7 +103,8 @@ In PlayStation names: **1P is □, 2P is △, 3P is L1, 4P is R1, 1K is ✕, 2K 
 
 `make test` runs everything: the decoding logic (`core.js`), the browser tests (headless Chromium over the DevTools
 protocol, skipped if Chromium is missing) and the Python and shell tools, which run against fake sysfs trees and
-never touch real hardware. `make lint` checks syntax.
+never touch real hardware. `make lint` checks syntax. Tested with Node 26 and Python 3.14. The browser tests need Node 22 or
+newer (for its built-in WebSocket client) and Chromium, and skip themselves without them.
 
 | File | |
 |------|---|
