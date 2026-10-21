@@ -41,16 +41,18 @@ reload() {
 if [[ $action == remove ]]; then
   "${sudo_cmd[@]}" rm -f "$rules_dir/$main_name" "$rules_dir/$uinput_name"
   reload
-  echo "Removed the Maestro S3 udev rules."
+  echo "Removed the Maestro S3 udev rules. The LED files keep their open permissions until the controller is unplugged and reconnected."
   exit 0
 fi
 
+# The pad node has the DualShock 4 v2 ids and a name ending in "Wireless Controller" (USB adds a Sony prefix;
+# the motion-sensor and touchpad nodes have longer names).
 connected_macs() {
-  local d uniq
+  local d name uniq
   for d in "$sysfs"/class/input/event*/device; do
     [[ -r $d/name && -r $d/uniq && -r $d/id/vendor && -r $d/id/product ]] || continue
-    if [[ "$(<"$d/name")" == "Sony Interactive Entertainment Wireless Controller" \
-          && "$(<"$d/id/vendor")" == 054c && "$(<"$d/id/product")" == 09cc ]]; then
+    name=$(<"$d/name")
+    if [[ "$(<"$d/id/vendor")" == 054c && "$(<"$d/id/product")" == 09cc && $name == *"Wireless Controller" ]]; then
       uniq=$(<"$d/uniq")
       if [[ -n $uniq ]]; then echo "${uniq,,}"; fi
     fi

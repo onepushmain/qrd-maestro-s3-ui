@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Build an SDL2 GameControllerDB line for the controller from its live evdev identity.
-# Usage: tools/sdl-mapping.sh > dist/maestro-s3-sdl.txt
-#        export SDL_GAMECONTROLLERCONFIG="$(cat dist/maestro-s3-sdl.txt)"
+# Usage: tools/sdl-mapping.sh > ~/maestro-s3-sdl.txt     (a failed run still empties the file you redirect to)
+#        export SDL_GAMECONTROLLERCONFIG="$(cat ~/maestro-s3-sdl.txt)"
 #
 # SDL's built-in HIDAPI PS4 driver normally handles this controller already; this mapping matters
 # when HIDAPI is off (SDL_JOYSTICK_HIDAPI=0) or a game reads raw evdev.
@@ -9,9 +9,17 @@
 set -euo pipefail
 sysfs=${SYSFS:-/sys}
 
+# The pad node: DualShock 4 v2 ids and a name ending in "Wireless Controller". The USB name has a Sony prefix and the
+# Bluetooth name does not; the motion-sensor and touchpad nodes have longer names.
+is_pad() {
+  local d=$1/device name vendor product
+  name=$(cat "$d/name" 2>/dev/null) vendor=$(cat "$d/id/vendor" 2>/dev/null) product=$(cat "$d/id/product" 2>/dev/null)
+  [[ ${vendor,,} == 054c && ${product,,} == 09cc && $name == *"Wireless Controller" ]]
+}
+
 ev=""
 for d in "$sysfs"/class/input/event*; do
-  if [[ "$(cat "$d/device/name" 2>/dev/null)" == "Sony Interactive Entertainment Wireless Controller" ]]; then
+  if is_pad "$d"; then
     ev=$d
     break
   fi

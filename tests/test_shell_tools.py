@@ -26,18 +26,18 @@ def write(path, text):
     path.write_text(text)
 
 
-def add_led_group(root, name, hid_id):
+def add_led_group(root, name, hid_id, uniq=None):
     for channel in ("red", "green", "blue", "global"):
         led = pathlib.Path(root, "class", "leds", f"{name}:{channel}")
         write(led / "brightness", "0\n")
-        write(led / "device" / "uevent", f"DRIVER=playstation\nHID_ID={hid_id}\n")
+        write(led / "device" / "uevent", f"DRIVER=playstation\nHID_ID={hid_id}\n" + (f"HID_UNIQ={uniq}\n" if uniq else ""))
 
 
-def add_input(root, event, name, vendor, product, version="8111", uniq="aa:bb:cc:dd:ee:ff"):
+def add_input(root, event, name, vendor, product, version="8111", uniq="aa:bb:cc:dd:ee:ff", bustype="0003"):
     dev = pathlib.Path(root, "class", "input", event, "device")
     write(dev / "name", name + "\n")
     write(dev / "uniq", uniq + "\n")
-    for k, v in (("bustype", "0003"), ("vendor", vendor), ("product", product), ("version", version)):
+    for k, v in (("bustype", bustype), ("vendor", vendor), ("product", product), ("version", version)):
         write(dev / "id" / k, v + "\n")
 
 
@@ -87,12 +87,19 @@ class Lightbar(unittest.TestCase):
         self.assertEqual(brightness(self.root, "input5"), [0, 0, 0])
 
     def test_battery_colour_follows_the_charge_level(self):
-        add_led_group(self.root, "input5", DS4_V2)
+        add_led_group(self.root, "input5", DS4_V2, uniq="aa:bb:cc:dd:ee:ff")
         cap = pathlib.Path(self.root, "class", "power_supply", "ps-controller-battery-aa:bb:cc:dd:ee:ff", "capacity")
         for level, want in ((70, [0, 255, 0]), (40, [255, 140, 0]), (10, [255, 0, 0])):
             write(cap, f"{level}\n")
             self.assertEqual(run("lightbar.sh", "battery", env=self.env).returncode, 0)
             self.assertEqual(brightness(self.root, "input5"), want, f"{level}%")
+
+    def test_battery_colour_uses_this_controllers_battery_not_another_pads(self):
+        add_led_group(self.root, "input5", DS4_V2, uniq="aa:bb:cc:dd:ee:ff")
+        for mac, level in (("11:22:33:44:55:66", 10), ("aa:bb:cc:dd:ee:ff", 70)):   # the other pad sorts first
+            write(pathlib.Path(self.root, "class", "power_supply", f"ps-controller-battery-{mac}", "capacity"), f"{level}\n")
+        self.assertEqual(run("lightbar.sh", "battery", env=self.env).returncode, 0)
+        self.assertEqual(brightness(self.root, "input5"), [0, 255, 0])
 
     def test_battery_mode_explains_a_missing_battery(self):
         add_led_group(self.root, "input5", DS4_V2)
@@ -124,6 +131,21 @@ class SdlMapping(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertTrue(r.stdout.startswith("030000004c050000cc09000011810000,QRD Maestro S3,"), r.stdout)
         self.assertIn("platform:Linux", r.stdout)
+
+    def test_finds_the_controller_when_bluetooth_names_it_plainly(self):
+        with tempfile.TemporaryDirectory() as root:
+            add_input(root, "event7", "Wireless Controller", "054c", "09cc", bustype="0005")
+            r = run("sdl-mapping.sh", env={"SYSFS": root})
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertTrue(r.stdout.startswith("05000000"), r.stdout)   # bus 0005 is Bluetooth
+
+    def test_ignores_sensor_and_touchpad_nodes_and_other_pads(self):
+        with tempfile.TemporaryDirectory() as root:
+            add_input(root, "event7", "Sony Interactive Entertainment Wireless Controller Motion Sensors", "054c", "09cc")
+            add_input(root, "event8", "Sony Interactive Entertainment Wireless Controller Touchpad", "054c", "09cc")
+            add_input(root, "event9", "Wireless Controller", "054c", "05c4")   # a DualShock 4 v1
+            r = run("sdl-mapping.sh", env={"SYSFS": root})
+        self.assertEqual(r.returncode, 1)
 
     def test_reports_when_the_controller_is_not_connected(self):
         with tempfile.TemporaryDirectory() as root:
@@ -204,6 +226,21 @@ class InstallUdev(unittest.TestCase):
             r = run("install-udev.sh", "--print", env={"SYSFS": root})
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn('ATTRS{uniq}=="11:22:33:44:55:66"', r.stdout)
+
+    def test_finds_a_controller_that_bluetooth_names_plainly(self):
+        with tempfile.TemporaryDirectory() as root:
+            add_input(root, "event7", "Wireless Controller", "054c", "09cc", uniq="11:22:33:44:55:66", bustype="0005")
+            r = run("install-udev.sh", "--print", env={"SYSFS": root})
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn('ATTRS{uniq}=="11:22:33:44:55:66"', r.stdout)
+
+    def test_does_not_take_a_mac_from_sensor_nodes_or_other_pads(self):
+        with tempfile.TemporaryDirectory() as root:
+            add_input(root, "event7", "Sony Interactive Entertainment Wireless Controller Motion Sensors", "054c", "09cc", uniq="11:22:33:44:55:66")
+            add_input(root, "event8", "Wireless Controller", "054c", "05c4", uniq="66:55:44:33:22:11")
+            r = run("install-udev.sh", "--print", env={"SYSFS": root})
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("No Maestro S3", r.stderr)
 
     def test_asks_for_a_mac_when_two_controllers_are_connected(self):
         with tempfile.TemporaryDirectory() as root:

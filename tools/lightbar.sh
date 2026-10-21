@@ -24,11 +24,12 @@ case "${1:-}" in
     fi ;;
 esac
 
-led=""
+led="" uniq=""
 for l in "$sysfs"/class/leds/input*:red; do
   [[ -e $l ]] || continue
   if grep -qE '^HID_ID=000[35]:0000054C:000009CC$' "$l/device/uevent" 2>/dev/null; then
     led=${l%:red}
+    uniq=$(sed -n 's/^HID_UNIQ=//p' "$l/device/uevent")   # its battery is ps-controller-battery-<this MAC>
     break
   fi
 done
@@ -43,11 +44,9 @@ case $mode in
   off) set_rgb 0 0 0 ;;
   rgb) set_rgb "$((10#$1))" "$((10#$2))" "$((10#$3))" ;;
   battery)
-    cap=""
-    for f in "$sysfs"/class/power_supply/ps-controller-battery-*/capacity; do
-      if [[ -r $f ]]; then cap=$(<"$f"); break; fi
-    done
-    [[ $cap =~ ^[0-9]+$ ]] || die "no battery information for the controller"
+    cap="" f="$sysfs/class/power_supply/ps-controller-battery-${uniq,,}/capacity"
+    if [[ -n $uniq && -r $f ]]; then cap=$(<"$f"); fi
+    [[ $cap =~ ^[0-9]+$ ]] || die "no battery information for this controller"
     if   (( cap > 60 )); then set_rgb 0 255 0
     elif (( cap > 25 )); then set_rgb 255 140 0
     else set_rgb 255 0 0; fi
