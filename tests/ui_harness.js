@@ -34,17 +34,21 @@ async function startBrowser() {
   const args = ["--headless=new", "--disable-gpu", "--disable-dev-shm-usage", "--no-first-run", "--disable-extensions",
     `--user-data-dir=${profile}`, "--remote-debugging-port=0", "about:blank"];
   if (process.getuid && process.getuid() === 0) args.unshift("--no-sandbox");
-  browser = spawn(chromium, args, { stdio: ["ignore", "ignore", "pipe"] });
+  browser = spawn(chromium, args, { stdio: ["ignore", "ignore", "pipe"], detached: true });   // its own process group, so teardown can reach every child
   const port = await new Promise((resolve, reject) => {
     let buf = "";
-    browser.stderr.on("data", d => { buf += d; const m = buf.match(/DevTools listening on ws:\/\/127\.0\.0\.1:(\d+)/); if (m) resolve(m[1]); });
-    browser.on("exit", () => reject(new Error("Chromium exited early")));
-    setTimeout(() => reject(new Error("Chromium did not start")), 15000);
+    const giveUp = setTimeout(() => reject(new Error("Chromium did not start")), 15000);
+    browser.stderr.on("data", d => { buf += d; const m = buf.match(/DevTools listening on ws:\/\/127\.0\.0\.1:(\d+)/); if (m) { clearTimeout(giveUp); resolve(m[1]); } });
+    browser.on("exit", () => { clearTimeout(giveUp); reject(new Error("Chromium exited early")); });
   });
-  const targets = await (await fetch(`http://127.0.0.1:${port}/json`)).json();
-  const page = targets.find(t => t.type === "page");
+  let page;   // the first page can take a moment to be listed after "DevTools listening"
+  for (let tries = 0; tries < 50 && !page; tries++) {
+    page = (await (await fetch(`http://127.0.0.1:${port}/json`)).json()).find(t => t.type === "page");
+    if (!page) await sleep(100);
+  }
+  if (!page) throw new Error("Chromium has no page to drive");
   const ws = new WebSocket(page.webSocketDebuggerUrl);
-  await new Promise(r => ws.addEventListener("open", r));
+  await new Promise((resolve, reject) => { ws.addEventListener("open", resolve); ws.addEventListener("error", () => reject(new Error("could not connect to Chromium's DevTools"))); });
   let id = 0;
   const pending = new Map(), handlers = [];
   ws.addEventListener("message", e => {
@@ -62,7 +66,8 @@ async function startBrowser() {
 
 async function setup() { if (!skip) { await startServer(); await startBrowser(); } }
 
-// Wait for Chromium to be gone before removing its profile, or it writes into the folder being deleted.
+// Chromium's helper processes can outlive the main one by a moment and write into the profile again, so: stop the main
+// process, then everything left in its group, and remove the profile until it stays gone.
 async function teardown() {
   if (skip) return;
   cdp?.close();
@@ -71,9 +76,14 @@ async function teardown() {
   if (browser && browser.exitCode === null && browser.signalCode === null) {
     const exited = new Promise(r => browser.once("exit", r));
     browser.kill();
-    await exited;
+    await Promise.race([exited, sleep(5000)]);
   }
-  fs.rmSync(profile, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+  try { process.kill(-browser.pid, "SIGKILL"); } catch (e) { /* nothing left in the group */ }
+  for (let i = 0; i < 20; i++) {
+    fs.rmSync(profile, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+    await sleep(150);
+    if (!fs.existsSync(profile)) return;
+  }
 }
 
 // Open a page and collect everything that should never happen: console errors, CSP reports, third-party requests.
