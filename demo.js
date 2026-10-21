@@ -11,9 +11,9 @@
 
   function create(speed) {
     const reportMs = speed === "slow" ? 16 : 4;
-    const perTick = 16 / reportMs;
     const listeners = new Set();
     let timer = null;
+    let next = null;   // when the next report is due, on a clock that advances by exactly reportMs
 
     function frame([hat, face, shoulders]) {
       const bytes = new Uint8Array(63);
@@ -26,9 +26,10 @@
 
     function tick() {
       const now = performance.now();
+      if (next === null || now - next > 1000) next = now;   // the first tick, or the page was paused: restart, do not replay the gap
       const step = STEPS[Math.floor(now / STEP_MS) % STEPS.length];
-      for (let i = 0; i < perTick; i++) {   // timestamps are exact, whatever the timer jitter
-        const event = { reportId: 1, data: frame(step), timeStamp: now - (perTick - 1 - i) * reportMs };
+      for (; next <= now; next += reportMs) {               // deliver what is due; a late timer catches up, so spacing stays exact
+        const event = { reportId: 1, data: frame(step), timeStamp: next };
         listeners.forEach(fn => fn(event));
       }
     }
@@ -46,7 +47,7 @@
       },
       removeEventListener(type, fn) {
         listeners.delete(fn);
-        if (!listeners.size && timer) { clearInterval(timer); timer = null; }
+        if (!listeners.size && timer) { clearInterval(timer); timer = null; next = null; }
       },
     };
   }
